@@ -1,9 +1,15 @@
 # Keil uVision generated files
 *.uvguix
+*.uvguix.*
 *.uvgui
+*.uvgui.*
 *.uvopt
+*.uvopt.*
 *.uvoptx
+*.uvoptx.*
 *.uvproj
+*.uvprojx
+*.uvprojx.*
 
 # Build output files
 Objects/
