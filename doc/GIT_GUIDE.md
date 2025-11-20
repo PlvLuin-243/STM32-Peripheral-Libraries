@@ -160,6 +160,9 @@ git commit --amend -m "New commit message"
 # Thêm file vào commit cuối
 git add forgotten-file.c
 git commit --amend --no-edit
+
+# Force push với safety check
+git push --force-with-lease origin main
 ```
 
 ## 🔄 Workflow cơ bản

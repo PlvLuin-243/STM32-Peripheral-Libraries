@@ -11,6 +11,11 @@
 *.uvprojx
 *.uvprojx.*
 
+# Specific patterns
+*.uvguix.PC
+*.uvguix.DESKTOP-*
+*.uvguix.LAPTOP-*
+
 # Build output files
 Objects/
 Listings/
