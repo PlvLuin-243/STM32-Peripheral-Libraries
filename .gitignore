@@ -1,0 +1,54 @@
+# Keil uVision generated files
+*.uvguix
+*.uvgui
+*.uvopt
+*.uvoptx
+*.uvproj
+
+# Build output files
+Objects/
+Listings/
+DebugConfig/
+
+# Compiled files
+*.o
+*.d
+*.crf
+*.htm
+*.lnp
+*.map
+*.axf
+*.bin
+*.elf
+*.hex
+
+# Debug files
+*.sct
+
+# Log files
+*.log
+*.build_log.htm
+
+# Backup files
+*.bak
+*.orig
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE specific files
+.vscode/
+.idea/
+
+# RTE (Run-Time Environment)
+RTE/_Target_1/RTE_Components.h
+
+# Temporary files
+*.tmp
+*.temp
