@@ -79,6 +79,8 @@ git push -u origin feature/can-communication
 # Bỏ qua theo dõi file cụ thể
 git update-index --skip-worktree CAN_MASTER/CAN_MASTER.uvguix.PC
 git update-index --skip-worktree CAN_MASTER/CAN_MASTER.uvprojx
+ git update-index --skip-worktree CAN_SLAVE_BUSH/CAN_SLAVE_BUSH.uvprojx
+git update-index --skip-worktree CAN_SLAVE_MOTOR/CAN_SLAVE_MOTOR.uvprojx
 
 # Bỏ qua nhiều file cùng lúc
 git update-index --skip-worktree file1.txt file2.txt

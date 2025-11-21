@@ -20,6 +20,7 @@
 Objects/
 Listings/
 DebugConfig/
+RTE/
 
 # Compiled files
 *.o
@@ -56,9 +57,6 @@ Thumbs.db
 # IDE specific files
 .vscode/
 .idea/
-
-# RTE (Run-Time Environment)
-RTE/_Target_1/RTE_Components.h
 
 # Temporary files
 *.tmp
