@@ -94,6 +94,7 @@ git ls-files -v | grep ^S
 ```bash
 # Bật lại theo dõi file
 git update-index --no-skip-worktree CAN_MASTER/CAN_MASTER.uvguix.PC
+git update-index --no-skip-worktree CAN_MASTER/CAN_MASTER.uvprojx
 ```
 
 ### Use case phổ biến cho STM32/Keil
