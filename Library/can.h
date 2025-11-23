@@ -28,9 +28,8 @@ typedef struct {
 
 /**
  * @brief Khoi tao CAN1 cho Standard CAN 2.0A
- * @param filter_id: Standard ID can nhan, 0 = chap nhan tat ca
  */
-void can_init(uint16_t filter_id);
+void can_init(void);
 
 /**
  * @brief Gui CAN message - NON-BLOCKING
@@ -61,10 +60,20 @@ bool can_is_valid_standard_id(uint16_t id);
 uint8_t can_get_bus_error_count(void);
 
 /**
+ * @brief Cấu hình bộ lọc CAN MASTER
+ */
+void can_master_setup_filters(void)
+
+/**
+ * @brief Cấu hình bộ lọc CAN SLAVE
+ */
+void can_slave_setup_filters(void)
+
+/**
  * @brief Callback khi nhan duoc message - INTERRUPT
  * @param msg: Con tro den message vua nhan
  * @note Ham yeu - nguoi dung co the override trong main.c
  */
-__attribute__((weak)) void can_rx_callback(can_message_t *msg);
+__attribute__((weak)) void can_rx_callback(can_message_t *msg, uint8_t fmi);
 
 #endif // CAN_H

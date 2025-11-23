@@ -21,6 +21,7 @@ Objects/
 Listings/
 DebugConfig/
 RTE/
+EventRecorderStub.scvd
 
 # Compiled files
 *.o

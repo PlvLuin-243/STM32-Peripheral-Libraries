@@ -11,7 +11,6 @@ static void can_configure_gpio(void);
 static bool can_enter_init_mode(void);
 static void can_configure_bit_timing(void);
 static void can_configure_operating_mode(void);
-static void can_configure_filters(uint16_t filter_id);
 static void can_configure_interrupts(void);
 static bool can_exit_init_mode(void);
 static void can_clear_mailboxes(void);
@@ -38,22 +37,16 @@ static void can_handle_fifo_errors(void);
 // ============================================================================
 static can_message_t rx_buffer;
 static volatile bool msg_received = false;
-
+static uint8_t fmi=0;
 // ============================================================================
 // PUBLIC FUNCTIONS
 // ============================================================================
 
 /**
  * @brief Khoi tao CAN1 cho Standard CAN 2.0A - 500 kbps @ 72MHz (PB8=RX, PB9=TX)
- * @param filter_id: Standard ID (11-bit) can nhan, 0 = chap nhan tat ca
  */
-void can_init(uint16_t filter_id)
+void can_init(void)
 {
-    // Buoc 0: Kiem tra filter_id hop le cho Standard CAN
-    if(filter_id > CAN_STANDARD_ID_MASK && filter_id != 0) {
-        return; // ID khong hop le - chi ho tro 11-bit Standard ID
-    }
-    
     // Buoc 1: Bat clock cho CAN1, GPIOB va AFIO
     can_configure_clocks();
     
@@ -71,24 +64,21 @@ void can_init(uint16_t filter_id)
     // Buoc 5: Cau hinh che do hoat dong Standard CAN (khong Time Triggered)
     can_configure_operating_mode();
     
-    // Buoc 6: Cau hinh filter cho Standard ID (11-bit) - su dung Filter 1
-    can_configure_filters(filter_id);
-    
-    // Buoc 7: Bat FIFO1 interrupts (message pending, full, overrun)
+    // Buoc 6: Bat FIFO1 interrupts (message pending, full, overrun)
     can_configure_interrupts();
     
-    // Buoc 8: Thoat che do Initialization Mode ve Normal Mode
+    // Buoc 7: Thoat che do Initialization Mode ve Normal Mode
     if(!can_exit_init_mode()) {
         return; // Khong thoat duoc init mode - cau hinh sai
     }
     
-    // Buoc 9: Clear tat ca TX mailboxes (0, 1, 2) va status flags
+    // Buoc 8: Clear tat ca TX mailboxes (0, 1, 2) va status flags
     can_clear_mailboxes();
     
-    // Buoc 10: Clear FIFO1 va tat ca pending messages
+    // Buoc 9: Clear FIFO1 va tat ca pending messages
     can_clear_fifo1();
     
-    // Buoc 11: Reset internal buffers va flags
+    // Buoc 10: Reset internal buffers va flags
     can_reset_buffers();
 }
 
@@ -138,6 +128,8 @@ void CAN1_RX1_IRQHandler(void)
     if(CAN1->RF1R & CAN_RF1R_FMP1) {
         
         // Buoc 2: Doc Standard ID (11-bit) va RTR flag tu RIR register
+         fmi = (CAN1->sFIFOMailBox[1].RDTR >> 8) & 0xFF;  // FMI = bank matching filter index
+			
         can_read_received_id();
         
         // Buoc 3: Doc Data Length Code (0-8) tu RDTR register
@@ -153,7 +145,7 @@ void CAN1_RX1_IRQHandler(void)
         msg_received = true;
         
         // Buoc 7: Goi callback function de xu ly message
-        can_rx_callback(&rx_buffer);
+        can_rx_callback(&rx_buffer, fmi);
     }
     
     // Buoc 8: Xu ly loi FIFO1 (overrun, full) neu co
@@ -197,7 +189,7 @@ uint8_t can_get_bus_error_count(void)
 /**
  * @brief Callback yeu - nguoi dung co the override
  */
-__attribute__((weak)) void can_rx_callback(can_message_t *msg)
+__attribute__((weak)) void can_rx_callback(can_message_t *msg, uint8_t fmi)
 {
     // Nguoi dung implement trong main.c
 }
@@ -269,33 +261,6 @@ static void can_configure_operating_mode(void)
     CAN1->MCR &= ~CAN_MCR_RFLM;  // FIFO not locked on overrun
     CAN1->MCR &= ~CAN_MCR_TXFP;  // Priority by identifier
     CAN1->MCR &= ~CAN_MCR_TTCM;  // Time Triggered Mode disabled
-}
-
-/**
- * @brief Cau hinh filter cho Standard ID (11-bit)
- */
-static void can_configure_filters(uint16_t filter_id)
-{
-    CAN1->FMR |= CAN_FMR_FINIT;
-    
-    CAN1->FA1R &= ~CAN_FA1R_FACT0;  // Tat filter 0
-    CAN1->FS1R |= CAN_FS1R_FSC0;    // Filter 0: 32-bit scale
-    CAN1->FM1R &= ~CAN_FM1R_FBM0;   // Filter 0: Identifier Mask mode
-    
-    // Cau hinh filter ID va mask
-    if(filter_id == 0) {
-        // Chap nhan tat ca Standard ID
-        CAN1->sFilterRegister[0].FR1 = 0x00000000;
-        CAN1->sFilterRegister[0].FR2 = 0x00000000;
-    } else {
-        // Chi chap nhan Standard ID cu the
-        CAN1->sFilterRegister[0].FR1 = ((uint32_t)(filter_id & CAN_STANDARD_ID_MASK)) << 21;
-        CAN1->sFilterRegister[0].FR2 = ((uint32_t)CAN_STANDARD_ID_MASK) << 21;
-    }
-    
-    CAN1->FFA1R |= CAN_FFA1R_FFA0;  // Filter 0 gan cho FIFO 1
-    CAN1->FA1R |= CAN_FA1R_FACT0;   // Bat filter 0
-    CAN1->FMR &= ~CAN_FMR_FINIT;    // Thoat filter initialization
 }
 
 /**
@@ -524,4 +489,62 @@ static void can_handle_fifo_errors(void)
     if(CAN1->RF1R & CAN_RF1R_FULL1) {
         CAN1->RF1R |= CAN_RF1R_FULL1;
     }
+}
+
+/**
+ * @brief Cấu hình bộ lọc CAN MASTER
+ */
+void can_master_setup_filters(void)
+{
+    CAN1->FMR |= CAN_FMR_FINIT;
+
+    // Bank 0: Slave 1 phản hồi (ID = 0x301)
+    CAN1->FS1R |= CAN_FS1R_FSC0;
+    CAN1->FM1R &= ~CAN_FM1R_FBM0;
+    CAN1->FFA1R |= CAN_FFA1R_FFA0;
+    CAN1->sFilterRegister[0].FR1 = (0x301 << 21);
+    CAN1->sFilterRegister[0].FR2 = (0x7FF << 21) | 0x07;
+    CAN1->FA1R |= CAN_FA1R_FACT0;
+
+    // Bank 1: Slave 2 phản hồi (ID = 0x302)
+    CAN1->FS1R |= CAN_FS1R_FSC1;
+    CAN1->FM1R &= ~CAN_FM1R_FBM1;
+    CAN1->FFA1R |= CAN_FFA1R_FFA1;
+    CAN1->sFilterRegister[1].FR1 = (0x302 << 21);
+    CAN1->sFilterRegister[1].FR2 = (0x7FF << 21) | 0x07;
+    CAN1->FA1R |= CAN_FA1R_FACT1;
+
+    CAN1->FMR &= ~CAN_FMR_FINIT;
+}
+
+/**
+ * @brief Cấu hình bộ lọc CAN SLAVE
+ */
+void can_slave_setup_filters(void)
+{
+    CAN1->FMR |= CAN_FMR_FINIT;
+		CAN1->FA1R = 0;
+    // Bank 0: Commands chung (0x100-0x10F)
+    CAN1->FS1R |= CAN_FS1R_FSC0;        // 32-bit scale
+    CAN1->FM1R &= ~CAN_FM1R_FBM0;       // Mask mode
+    CAN1->FFA1R |= CAN_FFA1R_FFA0;      // Gán filter 0 vào FIFO 1
+    CAN1->sFilterRegister[0].FR1 = (0x100 << 21);
+    CAN1->sFilterRegister[0].FR2 = (0x7F0 << 21);  // Nhận 0x100-0x10F
+    CAN1->FA1R |= CAN_FA1R_FACT0;
+
+    // Bank 1: Setpoint commands
+    CAN1->FS1R &= ~CAN_FS1R_FSC1;       // 16-bit scale
+    CAN1->FM1R |= CAN_FM1R_FBM1;        // List mode
+    CAN1->FFA1R |= CAN_FFA1R_FFA1;      // Gán filter 1 vào FIFO 1
+    
+    if(SLAVE_ID == 1) {
+        // Slave 1: nhận 0x201 (ALL) và 0x211 (SLAVE1)
+        CAN1->sFilterRegister[1].FR1 = (0x201 << 5) << 16 | (0x211 << 5);
+    } else {
+        // Slave 2: nhận 0x201 (ALL) và 0x221 (SLAVE2)
+        CAN1->sFilterRegister[1].FR1 = (0x201 << 5) << 16 | (0x221 << 5);
+    }
+    CAN1->sFilterRegister[1].FR2 = 0;
+    CAN1->FA1R |= CAN_FA1R_FACT1;
+    CAN1->FMR &= ~CAN_FMR_FINIT;    // Thoat filter initialization
 }
