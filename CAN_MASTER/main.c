@@ -40,6 +40,16 @@ typedef enum {
 #define LCD_UPDATE_PERIOD_MS    100
 #define CONNECTION_TIMEOUT_MS   5000
 
+// ADC and conversion constants
+#define ADC_MAX_VALUE           4090
+#define PERCENTAGE_MAX          100
+
+// SLAVE1 (Motor) constants
+#define MOTOR_MAX_RPM           6200
+
+// SLAVE2 (Buck) constants
+#define BUCK_MAX_VOLT           1000    // 10.00V in 0.01V units
+
 // Status Register (SR) bit definitions
 #define SR_BTN_SLAVE1           (1 << 0)   // Bit 0: Button Slave1 pressed
 #define SR_BTN_SLAVE2           (1 << 1)   // Bit 1: Button Slave2 pressed
@@ -50,6 +60,7 @@ typedef enum {
 #define SR_TIMER_100MS          (1 << 6)   // Bit 6: Timer 100ms flag
 #define SR_CAN_RX               (1 << 7)   // Bit 7: CAN message received
 #define SR_STATUS_CHECK         (1 << 8)   // Bit 8: Status check flag (every 3s)
+#define SR_SETPOINT_UPDATE      (1 << 9)   // Bit 9: Setpoint update flag (every 100ms)
 
 // =================== STRUCTS ===================
 typedef struct {
@@ -66,11 +77,8 @@ typedef struct {
     master_mode_t current_mode;
     control_target_t control_target;
     uint8_t uart_setpoint;
-    uint8_t uart_setpoint_prev;      // Previous UART value for change detection
     uint16_t adc_value;
     uint8_t adc_setpoint;
-    uint8_t adc_setpoint_prev;       // Previous ADC value for change detection
-    // Note: setpoint_rpm and setpoint_volt removed - calculated on-the-fly for display
 } master_control_t;
 
 // =================== GLOBAL VARIABLES ===================
@@ -109,11 +117,12 @@ void button_control_handler(void);
 
 // CAN communication
 void can_send_command(can_command_t cmd);
-void can_send_setpoint(uint8_t slave_id, uint8_t percentage);
-void can_send_setpoint_all(uint8_t percentage);
+void can_send_setpoint(uint8_t slave_id, uint16_t adc_val);
+void can_send_setpoint_all(uint16_t adc_val);
 void can_send_status_all(void);
 void send_setpoint_to_target(uint8_t value);
 void send_setpoint_to_slaves(void);
+void send_setpoint_to_running_slaves(void);
 void can_rx_callback(can_message_t *msg, uint8_t fmi);
 
 // Slave management
@@ -179,6 +188,12 @@ int main(void)
             adc_process();  // Always process ADC to update values
         }
         
+        // Process setpoint update (every 100ms)
+        if (SR & SR_SETPOINT_UPDATE) {
+            SR &= ~SR_SETPOINT_UPDATE;  // Clear flag
+            send_setpoint_to_running_slaves();
+        }
+        
         // Process status check
         if (SR & SR_STATUS_CHECK) {
             SR &= ~SR_STATUS_CHECK;  // Clear flag
@@ -227,28 +242,11 @@ void adc_gpio_init(void)
 
 void adc_process(void)
 {
-    // Read ADC value and convert to 0-100 range
     master_ctrl.adc_value = adc_value;
-
-    master_ctrl.adc_setpoint = (uint8_t)((adc_value * 100UL) / 4090UL);
+    master_ctrl.adc_setpoint = (uint8_t)((adc_value * PERCENTAGE_MAX) / ADC_MAX_VALUE);
     
-    if (master_ctrl.adc_setpoint > 100)
-        master_ctrl.adc_setpoint = 100;
-    
-    // Only send if in ADC mode
-    if (master_ctrl.current_mode == MODE_SETPOINT_ADC) {
-        // Check if ADC changed > 1
-        int16_t adc_diff = (int16_t)master_ctrl.adc_setpoint - (int16_t)master_ctrl.adc_setpoint_prev;
-        bool adc_changed = (adc_diff > 1 || adc_diff < -1);
-        
-        if (adc_changed) {
-            // Send percentage setpoint to slaves
-            send_setpoint_to_slaves();
-            
-            // Update previous value
-            master_ctrl.adc_setpoint_prev = master_ctrl.adc_setpoint;
-        }
-    }
+    if (master_ctrl.adc_setpoint > PERCENTAGE_MAX)
+        master_ctrl.adc_setpoint = PERCENTAGE_MAX;
 }
 
 void buttons_init(void)
@@ -294,10 +292,8 @@ void variables_init(void)
     master_ctrl.current_mode = MODE_SETPOINT_UART;
     master_ctrl.control_target = CONTROL_TARGET_ALL;
     master_ctrl.uart_setpoint = 0;
-    master_ctrl.uart_setpoint_prev = 0;
     master_ctrl.adc_value = 0;
     master_ctrl.adc_setpoint = 0;
-    master_ctrl.adc_setpoint_prev = 0;
     
     slave_info_init(&slave1_info, 1);
     slave_info_init(&slave2_info, 2);
@@ -352,10 +348,10 @@ void button_slave1_handler(void)
         // If stopped or idle, send START command
         can_send_command(CMD_START_SLAVE1);
         Delay_ms(10);  // Small delay for START command processing
-        // Send current setpoint percentage after START
-        uint8_t current_setpoint = (master_ctrl.current_mode == MODE_SETPOINT_ADC) ? 
-                                    master_ctrl.adc_setpoint : master_ctrl.uart_setpoint;
-        can_send_setpoint(1, current_setpoint);
+        // Send current ADC value after START
+        uint16_t adc_val = (master_ctrl.current_mode == MODE_SETPOINT_ADC) ? 
+                           master_ctrl.adc_value : ((master_ctrl.uart_setpoint * ADC_MAX_VALUE) / PERCENTAGE_MAX);
+        can_send_setpoint(1, adc_val);
     }
 }
 
@@ -369,23 +365,17 @@ void button_slave2_handler(void)
         // If stopped or idle, send START command
         can_send_command(CMD_START_SLAVE2);
         Delay_ms(10);  // Small delay for START command processing
-        // Send current setpoint percentage after START
-        uint8_t current_setpoint = (master_ctrl.current_mode == MODE_SETPOINT_ADC) ? 
-                                    master_ctrl.adc_setpoint : master_ctrl.uart_setpoint;
-        can_send_setpoint(2, current_setpoint);
+        // Send current ADC value after START
+        uint16_t adc_val = (master_ctrl.current_mode == MODE_SETPOINT_ADC) ? 
+                           master_ctrl.adc_value : ((master_ctrl.uart_setpoint * ADC_MAX_VALUE) / PERCENTAGE_MAX);
+        can_send_setpoint(2, adc_val);
     }
 }
 
 void button_control_handler(void)
 {
-    // Chuyển đổi control target: Slave1 -> Slave2 -> All -> Slave1...
-    if (master_ctrl.control_target == CONTROL_TARGET_SLAVE1) {
-        master_ctrl.control_target = CONTROL_TARGET_SLAVE2;
-    } else if (master_ctrl.control_target == CONTROL_TARGET_SLAVE2) {
-        master_ctrl.control_target = CONTROL_TARGET_ALL;
-    } else {
-        master_ctrl.control_target = CONTROL_TARGET_SLAVE1;
-    }
+    // Chuyển đổi control target: All(2) -> Slave2(1) -> Slave1(0) -> All(2)...
+    master_ctrl.control_target = (master_ctrl.control_target + 2) % 3;
 }
 
 // =================== CAN COMMUNICATION ===================
@@ -399,57 +389,105 @@ void can_send_command(can_command_t cmd)
     can_transmit(&msg);
 }
 
-void can_send_setpoint(uint8_t slave_id, uint8_t percentage)
+void can_send_setpoint(uint8_t slave_id, uint16_t adc_val)
 {
     can_message_t msg;
     msg.rtr = false;
-    msg.length = 1;  // Only 1 byte for percentage (0-100)
+    msg.length = 2;  // 2 bytes for 16-bit value (RPM or VOLT)
     
-    // Send percentage value
-    msg.data[0] = percentage;
+    uint16_t value;
     
     if (slave_id == 1) {
+        // SLAVE1: Convert ADC directly to RPM
+        value = (uint16_t)((adc_val * MOTOR_MAX_RPM) / ADC_MAX_VALUE);
         msg.id = CMD_SETPOINT_SLAVE1;
     } else if (slave_id == 2) {
+        // SLAVE2: Convert ADC directly to VOLT
+        value = (uint16_t)((adc_val * BUCK_MAX_VOLT) / ADC_MAX_VALUE);
         msg.id = CMD_SETPOINT_SLAVE2;
     } else {
         return;  // Invalid slave_id
     }
     
+    // Send value as MSB, LSB
+    msg.data[0] = (uint8_t)(value >> 8);    // MSB
+    msg.data[1] = (uint8_t)(value & 0xFF);  // LSB
+    
     can_transmit(&msg);
 }
 
-void can_send_setpoint_all(uint8_t percentage)
+void can_send_setpoint_all(uint16_t adc_val)
 {
     can_message_t msg;
     msg.id = CMD_SETPOINT_ALL;
     msg.rtr = false;
-    msg.length = 1;  // Only 1 byte for percentage (0-100)
+    msg.length = 4;  // 4 bytes: 2 for RPM, 2 for VOLT
     
-    // Send percentage value (both slaves will calculate their own values)
-    msg.data[0] = percentage;
+    // Calculate RPM value for SLAVE1 (first 2 bytes)
+    uint16_t rpm_value = (uint16_t)((adc_val * MOTOR_MAX_RPM) / ADC_MAX_VALUE);
+    msg.data[0] = (uint8_t)(rpm_value >> 8);    // RPM MSB
+    msg.data[1] = (uint8_t)(rpm_value & 0xFF);  // RPM LSB
+    
+    // Calculate VOLT value for SLAVE2 (last 2 bytes)
+    uint16_t volt_value = (uint16_t)((adc_val * BUCK_MAX_VOLT) / ADC_MAX_VALUE);
+    msg.data[2] = (uint8_t)(volt_value >> 8);    // VOLT MSB
+    msg.data[3] = (uint8_t)(volt_value & 0xFF);  // VOLT LSB
     
     can_transmit(&msg);
 }
 
 void send_setpoint_to_slaves(void)
 {
-    // Get current setpoint percentage based on mode
-    uint8_t current_setpoint = (master_ctrl.current_mode == MODE_SETPOINT_ADC) ? 
-                                master_ctrl.adc_setpoint : master_ctrl.uart_setpoint;
+    // Get current ADC value based on mode
+    uint16_t adc_val = (master_ctrl.current_mode == MODE_SETPOINT_ADC) ? 
+                       master_ctrl.adc_value : ((master_ctrl.uart_setpoint * ADC_MAX_VALUE) / PERCENTAGE_MAX);
     
     // Send setpoint based on current control target
     switch(master_ctrl.control_target) {
         case CONTROL_TARGET_SLAVE1:
-            can_send_setpoint(1, current_setpoint);
+            can_send_setpoint(1, adc_val);
             break;
             
         case CONTROL_TARGET_SLAVE2:
-            can_send_setpoint(2, current_setpoint);
+            can_send_setpoint(2, adc_val);
             break;
             
         case CONTROL_TARGET_ALL:
-            can_send_setpoint_all(current_setpoint);
+            can_send_setpoint_all(adc_val);
+            break;
+    }
+}
+
+void send_setpoint_to_running_slaves(void)
+{
+    // Get current ADC value based on mode
+    uint16_t adc_val = (master_ctrl.current_mode == MODE_SETPOINT_ADC) ? 
+                       master_ctrl.adc_value : ((master_ctrl.uart_setpoint * ADC_MAX_VALUE) / PERCENTAGE_MAX);
+    
+    switch(master_ctrl.control_target) {
+        case CONTROL_TARGET_SLAVE1:
+            if (slave1_info.status == STATUS_RUNNING) {
+                can_send_setpoint(1, adc_val);
+            }
+            break;
+            
+        case CONTROL_TARGET_SLAVE2:
+            if (slave2_info.status == STATUS_RUNNING) {
+                can_send_setpoint(2, adc_val);
+            }
+            break;
+            
+        case CONTROL_TARGET_ALL:
+            if (slave1_info.status == STATUS_RUNNING && slave2_info.status == STATUS_RUNNING) {
+                can_send_setpoint_all(adc_val);
+            } else {
+                if (slave1_info.status == STATUS_RUNNING) {
+                    can_send_setpoint(1, adc_val);
+                }
+                if (slave2_info.status == STATUS_RUNNING) {
+                    can_send_setpoint(2, adc_val);
+                }
+            }
             break;
     }
 }
@@ -622,11 +660,11 @@ void lcd_update_display(void)
     LCD_SetCursor(2, 4);
     if (master_ctrl.control_target == CONTROL_TARGET_SLAVE1) {
         // Only SLAVE1 controlled - show * only for SLAVE1
-        display_rpm = (uint16_t)((current_setpoint * 6200UL) / 100UL);
+        display_rpm = (uint16_t)((current_setpoint * MOTOR_MAX_RPM) / PERCENTAGE_MAX);
         snprintf(buffer, sizeof(buffer), "%4d *", display_rpm);
     } else if (master_ctrl.control_target == CONTROL_TARGET_ALL) {
         // Both slaves controlled - show * for both
-        display_rpm = (uint16_t)((current_setpoint * 6200UL) / 100UL);
+        display_rpm = (uint16_t)((current_setpoint * MOTOR_MAX_RPM) / PERCENTAGE_MAX);
         snprintf(buffer, sizeof(buffer), "%4d *", display_rpm);
     } else {
         // SLAVE2 only controlled - no * for SLAVE1
@@ -641,13 +679,13 @@ void lcd_update_display(void)
     LCD_SetCursor(2, 14);
     if (master_ctrl.control_target == CONTROL_TARGET_SLAVE2) {
         // Only SLAVE2 controlled - show * only for SLAVE2
-        display_volt = (uint16_t)((current_setpoint * 1000UL) / 100UL);
+        display_volt = (uint16_t)((current_setpoint * BUCK_MAX_VOLT) / PERCENTAGE_MAX);
         uint16_t volt_int = display_volt / 100;  // Integer part
         uint16_t volt_dec = (display_volt / 10) % 10;  // Decimal part
         snprintf(buffer, sizeof(buffer), "%2d.%01d *", volt_int, volt_dec);
     } else if (master_ctrl.control_target == CONTROL_TARGET_ALL) {
         // Both slaves controlled - show * for both
-        display_volt = (uint16_t)((current_setpoint * 1000UL) / 100UL);
+        display_volt = (uint16_t)((current_setpoint * BUCK_MAX_VOLT) / PERCENTAGE_MAX);
         uint16_t volt_int = display_volt / 100;  // Integer part
         uint16_t volt_dec = (display_volt / 10) % 10;  // Decimal part
         snprintf(buffer, sizeof(buffer), "%2d.%01d *", volt_int, volt_dec);
@@ -679,13 +717,14 @@ void Timer4_IRQ_Callback(void)
     if (lcd_update_counter >= LCD_UPDATE_PERIOD_MS)
     {
         lcd_update_counter = 0;
-        SR |= SR_TIMER_100MS;   // Set 100ms timer flag
-        SR |= SR_LCD_UPDATE;    // Set LCD update flag
-        SR |= SR_ADC_UPDATE;    // Set ADC update flag
+        SR |= SR_TIMER_100MS;       // Set 100ms timer flag
+        SR |= SR_LCD_UPDATE;        // Set LCD update flag
+        SR |= SR_ADC_UPDATE;        // Set ADC update flag
+        SR |= SR_SETPOINT_UPDATE;   // Set setpoint update flag
     }
     
-    // Status check every 3 seconds (3000ms)
-    if (status_check_counter >= 3000)
+    // Status check every 1 seconds (1000ms)
+    if (status_check_counter >= 1000)
     {
         status_check_counter = 0;
         SR |= SR_STATUS_CHECK;  // Set status check flag

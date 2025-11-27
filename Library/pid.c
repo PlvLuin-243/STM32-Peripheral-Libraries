@@ -56,9 +56,12 @@ float PIDController_Update(PIDController *pid, float setpoint, float measurement
     }
 
     /*
-    * Thanh phan dao ham (Derivative) - Sai phân ngược
+    * Thanh phan dao ham (Derivative) - Derivative on measurement với low-pass filter
+    * Dùng measurement thay vì error để tránh derivative kick khi setpoint thay đổi
     */
-    pid->differentiator = (error - pid->prevError)/pid->T;
+    pid->differentiator = -(2.0f * pid->Kd * (measurement - pid->prevMeasurement) 
+                            + (2.0f * pid->tau - pid->T) * pid->differentiator) 
+                            / (2.0f * pid->tau + pid->T);
 
 
     /*
