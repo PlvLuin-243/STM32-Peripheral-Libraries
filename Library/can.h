@@ -22,6 +22,29 @@ typedef struct {
     uint8_t data[CAN_STANDARD_DATA_LENGTH];        // Du lieu co dinh 8 bytes
 } can_message_t;
 
+typedef enum {
+    // Bank 0: Mask mode 0x100-0x10F (STATUS and SETPOINT_ALL)
+    CMD_SETPOINT_ALL = 0x100,
+    CMD_STATUS_ALL = 0x101,
+    CMD_STATUS_SLAVE1 = 0x102,
+    CMD_STATUS_SLAVE2 = 0x103,
+    
+    // Bank 1: List mode (START/STOP commands)
+    CMD_START_SLAVE1 = 0x120,
+    CMD_STOP_SLAVE1 = 0x121,
+    CMD_START_SLAVE2 = 0x130,
+    CMD_STOP_SLAVE2 = 0x131,
+    
+    // Bank 2: List mode (SETPOINT commands)
+    CMD_SETPOINT_SLAVE1 = 0x122,
+    CMD_SETPOINT_SLAVE2 = 0x132
+} can_command_t;
+
+typedef enum {
+    FB_SLAVE1 = 0x301,
+    FB_SLAVE2 = 0x302,
+}can_feedback_t;
+
 // ============================================================================
 // PUBLIC FUNCTION DECLARATIONS
 // ============================================================================
@@ -61,13 +84,25 @@ uint8_t can_get_bus_error_count(void);
 
 /**
  * @brief Cấu hình bộ lọc CAN MASTER
+ * @param fb_slave1: Feedback ID của Slave 1 (FB_SLAVE1 = 0x301)
+ * @param fb_slave2: Feedback ID của Slave 2 (FB_SLAVE2 = 0x302)
+ * @note Bank 0: Lọc FB_SLAVE1 (0x301)
+ * @note Bank 1: Lọc FB_SLAVE2 (0x302)
  */
-void can_master_setup_filters(void)
+void can_master_setup_filters(can_feedback_t fb_slave1, can_feedback_t fb_slave2);
 
 /**
- * @brief Cấu hình bộ lọc CAN SLAVE
+ * @brief Cấu hình bộ lọc CAN SLAVE với 3 filter banks
+ * @param cmd_start: Command START (CMD_START_SLAVE1 hoặc CMD_START_SLAVE2)
+ * @param cmd_stop: Command STOP (CMD_STOP_SLAVE1 hoặc CMD_STOP_SLAVE2)
+ * @param cmd_setpoint: Command SETPOINT riêng (CMD_SETPOINT_SLAVE1 hoặc CMD_SETPOINT_SLAVE2)
+ * @param cmd_status: Command STATUS riêng (CMD_STATUS_SLAVE1 hoặc CMD_STATUS_SLAVE2)
+ * 
+ * @note Bank 0: Mask mode - Chấp nhận 0x100-0x10F (STATUS và SETPOINT_ALL)
+ * @note Bank 1: List mode - START và STOP commands
+ * @note Bank 2: List mode - SETPOINT command riêng của slave
  */
-void can_slave_setup_filters(void)
+void can_slave_setup_filters(can_command_t cmd_start, can_command_t cmd_stop, can_command_t cmd_setpoint, can_command_t cmd_status);
 
 /**
  * @brief Callback khi nhan duoc message - INTERRUPT
