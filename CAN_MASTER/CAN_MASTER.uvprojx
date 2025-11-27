@@ -493,6 +493,11 @@
               <FileType>1</FileType>
               <FilePath>..\Library\adc.c</FilePath>
             </File>
+            <File>
+              <FileName>uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Library\uart.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
