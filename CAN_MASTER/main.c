@@ -32,13 +32,13 @@ typedef enum
 
 // =================== DEFINES ===================
 #define BUTTON_MODE_PORT GPIOB
-#define BUTTON_MODE_PIN GPIO_PIN_11
+#define BUTTON_MODE_PIN GPIO_PIN_10
 #define BUTTON_SLAVE1_PORT GPIOB
-#define BUTTON_SLAVE1_PIN GPIO_PIN_10
+#define BUTTON_SLAVE1_PIN GPIO_PIN_0
 #define BUTTON_SLAVE2_PORT GPIOB
 #define BUTTON_SLAVE2_PIN GPIO_PIN_1
 #define BUTTON_CONTROL_PORT GPIOB
-#define BUTTON_CONTROL_PIN GPIO_PIN_0
+#define BUTTON_CONTROL_PIN GPIO_PIN_11
 
 #define DEBOUNCE_DELAY_MS 25
 #define LCD_UPDATE_PERIOD_MS 100
@@ -52,10 +52,10 @@ typedef enum
 #define PERCENTAGE_MAX 100
 
 // SLAVE1 (Motor) constants
-#define MOTOR_MAX_RPM 6200
+#define MOTOR_MAX_RPM 6000
 
 // SLAVE2 (Buck) constants
-#define BUCK_MAX_VOLT 1000 // 10.00V in 0.01V units
+#define BUCK_MAX_VOLT 900 // 10.00V in 0.01V units
 
 // Status Register (SR) bit definitions
 #define SR_BTN_SLAVE1 (1 << 0)      // Bit 0: Button Slave1 pressed
@@ -266,7 +266,7 @@ void system_init(void)
     buttons_init();
     adc_gpio_init();
     DMA1_Channel1_Config();
-    ADC1_DMA_Config();
+    ADC1_DMA_Config(1);
 
     // Initialize UART DMA with IDLE line detection
     UART_Init(1, 9600);
@@ -401,27 +401,27 @@ void buttons_init(void)
     button_init(&button_slave2, BUTTON_SLAVE2_PORT, BUTTON_SLAVE2_PIN);
     button_init(&button_control, BUTTON_CONTROL_PORT, BUTTON_CONTROL_PIN);
 
-    // EXTI0 for Control button
+    // EXTI0 for Slave1 button (PB0)
     AFIO->EXTICR[0] &= ~AFIO_EXTICR1_EXTI0;
     AFIO->EXTICR[0] |= AFIO_EXTICR1_EXTI0_PB;
     EXTI->IMR |= EXTI_IMR_MR0;
     EXTI->FTSR |= EXTI_FTSR_TR0;
     NVIC_EnableIRQ(EXTI0_IRQn);
 
-    // EXTI1 for Slave2 button
+    // EXTI1 for Slave2 button (PB1)
     AFIO->EXTICR[0] &= ~AFIO_EXTICR1_EXTI1;
     AFIO->EXTICR[0] |= AFIO_EXTICR1_EXTI1_PB;
     EXTI->IMR |= EXTI_IMR_MR1;
     EXTI->FTSR |= EXTI_FTSR_TR1;
     NVIC_EnableIRQ(EXTI1_IRQn);
 
-    // EXTI10 for Slave1 button
+    // EXTI10 for Mode button (PB10)
     AFIO->EXTICR[2] &= ~AFIO_EXTICR3_EXTI10;
     AFIO->EXTICR[2] |= AFIO_EXTICR3_EXTI10_PB;
     EXTI->IMR |= EXTI_IMR_MR10;
     EXTI->FTSR |= EXTI_FTSR_TR10;
 
-    // EXTI11 for Mode button
+    // EXTI11 for Control button (PB11)
     AFIO->EXTICR[2] &= ~AFIO_EXTICR3_EXTI11;
     AFIO->EXTICR[2] |= AFIO_EXTICR3_EXTI11_PB;
     EXTI->IMR |= EXTI_IMR_MR11;
@@ -686,7 +686,7 @@ void can_rx_callback(can_message_t *msg, uint8_t fmi)
             slave1_info.current_setpoint = (msg->data[1] << 8) | msg->data[2];
         }
     }
-    else if (fmi == 1)
+    else if (fmi == 4)
     {
         // Message from SLAVE2
         // Message format: [status, setpoint_MSB, setpoint_LSB, ...]
@@ -726,7 +726,7 @@ void lcd_display_startup(void)
     LCD_SetCursor(2, 0);
     LCD_PrintString("Nhom: 2 - 21.33");
     LCD_SetCursor(3, 0);
-    LCD_PrintString("PROJECT: CAN - BUSH");
+    LCD_PrintString("Project: CAN - BUCK");
     Delay_ms(2000);
 
     LCD_Clear();
@@ -942,7 +942,7 @@ void EXTI0_IRQHandler(void)
     if (EXTI->PR & EXTI_PR_PR0)
     {
         EXTI->PR = EXTI_PR_PR0; // Clear pending bit
-        SR |= SR_BTN_CONTROL;   // Set button control flag in SR
+        SR |= SR_BTN_SLAVE1;    // Set button slave1 flag in SR (PB0)
     }
 }
 
@@ -951,7 +951,7 @@ void EXTI1_IRQHandler(void)
     if (EXTI->PR & EXTI_PR_PR1)
     {
         EXTI->PR = EXTI_PR_PR1; // Clear pending bit
-        SR |= SR_BTN_SLAVE2;    // Set button slave2 flag in SR
+        SR |= SR_BTN_SLAVE2;    // Set button slave2 flag in SR (PB1)
     }
 }
 
@@ -960,13 +960,13 @@ void EXTI15_10_IRQHandler(void)
     if (EXTI->PR & EXTI_PR_PR10)
     {
         EXTI->PR = EXTI_PR_PR10; // Clear pending bit
-        SR |= SR_BTN_SLAVE1;     // Set button slave1 flag in SR
+        SR |= SR_BTN_MODE;       // Set button mode flag in SR (PB10)
     }
 
     if (EXTI->PR & EXTI_PR_PR11)
     {
         EXTI->PR = EXTI_PR_PR11; // Clear pending bit
-        SR |= SR_BTN_MODE;       // Set button mode flag in SR
+        SR |= SR_BTN_CONTROL;    // Set button control flag in SR (PB11)
     }
 }
 
