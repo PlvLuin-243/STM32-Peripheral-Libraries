@@ -7,25 +7,13 @@
 #include "pid.h"
 
 void PIDController_Init(PIDController *pid) {
-
-    pid->Kp = PID_KP;
-    pid->Ki = PID_KI;
-    pid->Kd = PID_KD;
-    pid->tau = PID_TAU;
-    pid->limMin = PID_LIM_MIN;
-    pid->limMax = PID_LIM_MAX;
-    pid->limMinInt = PID_LIM_MIN_INT;
-    pid->limMaxInt = PID_LIM_MAX_INT;
-    pid->T = SAMPLE_TIME_S;
-
+    // Chi reset cac gia tri trang thai noi bo
+    // Cac he so Kp, Ki, Kd,... da duoc gan truoc do
     pid->integrator = 0.0f;
     pid->prevError  = 0.0f;
-
     pid->differentiator  = 0.0f;
     pid->prevMeasurement = 0.0f;
-
     pid->out = 0.0f;
-
 }
 
 float PIDController_Update(PIDController *pid, float setpoint, float measurement) {

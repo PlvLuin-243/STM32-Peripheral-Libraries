@@ -63,7 +63,8 @@ typedef struct
 } PIDController;
 
 extern PIDController pid;
-// Ham khoi tao bo dieu khien PID
+
+// Ham khoi tao bo dieu khien PID (reset cac gia tri trang thai)
 void PIDController_Init(PIDController *pid);
 
 // Ham cap nhat bo dieu khien PID

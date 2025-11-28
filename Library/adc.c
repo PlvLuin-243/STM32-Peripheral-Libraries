@@ -51,18 +51,25 @@ void DMA1_Channel1_Config(void)
 //------------------------------------------------------------------------------------------------//
 //                                ADC1 Configuration with DMA
 //------------------------------------------------------------------------------------------------//
-void ADC1_DMA_Config(void)
+void ADC1_DMA_Config(uint8_t channel)
 {
     RCC->APB2ENR |= (1 << 9);  // ADC1 clock
     
-    // Channel selection
-    ADC1->SQR1 &= ~(0xF << 20);
-    ADC1->SQR3 &= ~(0x1F << 0);
-    ADC1->SQR3 |= (1 << 0);    // Channel 1 (PA1)
+    // Channel selection (flexible)
+    ADC1->SQR1 &= ~(0xF << 20);       // Clear sequence length
+    ADC1->SQR3 &= ~(0x1F << 0);       // Clear channel selection
+    ADC1->SQR3 |= (channel << 0);     // Set channel (0=PA0, 1=PA1, 2=PA2, ...)
     
-    // Sample time
-    ADC1->SMPR2 &= ~(0x7 << (3 * 1));
-    ADC1->SMPR2 |=  (7 << (3 * 1));  // 239.5 cycles
+    // Sample time (channel dependent)
+    if (channel < 10) {
+        // Channels 0-9: Use SMPR2
+        ADC1->SMPR2 &= ~(0x7 << (3 * channel));
+        ADC1->SMPR2 |=  (7 << (3 * channel));  // 239.5 cycles
+    } else {
+        // Channels 10-17: Use SMPR1
+        ADC1->SMPR1 &= ~(0x7 << (3 * (channel - 10)));
+        ADC1->SMPR1 |=  (7 << (3 * (channel - 10)));  // 239.5 cycles
+    }
     
     // Modes
     ADC1->CR1 |= (1 << 8);     // SCAN mode

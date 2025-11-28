@@ -20,7 +20,7 @@ extern volatile uint8_t adc_update_flag;  // Co cap nhat ADC
 
 // Cau hinh phan cung
 void DMA1_Channel1_Config(void);     // Cau hinh DMA Channel 1 cho ADC
-void ADC1_DMA_Config(void);          // Cau hinh ADC voi DMA
+void ADC1_DMA_Config(uint8_t channel);  // Cau hinh ADC voi DMA cho channel cu the (0=PA0, 1=PA1, ...)
 void Process_ADC(void);              // Xu ly gia tri ADC
 
 #endif // __ADC_H
