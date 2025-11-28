@@ -488,6 +488,11 @@
               <FileType>1</FileType>
               <FilePath>..\Library\timer.c</FilePath>
             </File>
+            <File>
+              <FileName>adc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Library\adc.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
