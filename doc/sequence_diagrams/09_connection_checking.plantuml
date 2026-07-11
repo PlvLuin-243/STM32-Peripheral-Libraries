@@ -1,0 +1,135 @@
+@startuml connection_checking_activity
+
+header
+Name:        Connection Checking Activity Diagram (Legacy)
+Author:      STM32 CAN Master Team
+Version:     1.0
+Created:     2024-12-14
+Updated:     2024-12-14
+endheader
+
+title STM32 CAN Master - Sơ đồ kiểm tra kết nối (Heartbeat 1s)
+
+legend bottom right
+Legend
+|<back:#lightpink>     | Nội bộ BINH |
+|<back:#white>     | COTS/Bên ngoài |
+|<back:#lightblue>    | Khởi động |
+|<back:#lightgreen>   | Timer 1s |
+|<back:#lightyellow>  | Kiểm tra kết nối |
+|<back:#lightcyan>    | Phản hồi slaves |
+endlegend
+
+(*) --> "Khởi động hệ thống"
+
+partition "Kiểm tra kết nối ban đầu" #lightblue {
+    "Khởi động hệ thống" --> "Delay_ms(100)"
+    note right : Chờ slaves khởi tao xong
+    "Delay_ms(100)" --> "Gọi can_send_status_all()"
+    note right : Gửi RTR request kiểm tra kết nối ban đầu
+    "Gọi can_send_status_all()" --> "Chuẩn bị RTR frame"
+    note right : ID=CMD_STATUS_ALL, RTR=true, length=0
+    "Chuẩn bị RTR frame" --> "Broadcast đến tất cả slaves"
+    note right : Gửi yêu cầu status qua CAN bus
+    "Broadcast đến tất cả slaves" --> "Hiển thị màn hình startup"
+    note right : LCD hiển thị thông tin khởi động
+    "Hiển thị màn hình startup" --> "Bắt đầu Timer 1s"
+}
+
+partition "Chu kỳ kiểm tra định kỳ" #lightgreen {
+    "Bắt đầu Timer 1s" --> "Timer4 đếm 1ms"
+    note right : Timer4 IRQ callback mỗi 1ms
+    "Timer4 đếm 1ms" --> "Tăng status_check_counter"
+    note right : Đếm từ 0 đến 1000
+    "Tăng status_check_counter" --> if "Counter >= 1000?" then
+        -->[CÓ] "Reset counter = 0"
+        note right : Đạt chu kỳ 1 giây
+        "Reset counter = 0" --> "Đặt SR |= SR_STATUS_CHECK"
+        note right : Báo hiệu main loop (bit 8 trong SR)
+        "Đặt SR |= SR_STATUS_CHECK" --> "Main loop phát hiện cờ"
+    else
+        -->[CHƯA] "Timer4 đếm 1ms"
+        note right : Tiếp tục đếm
+    endif
+}
+
+partition "Xử lý kiểm tra kết nối" #lightyellow {
+    "Main loop phát hiện cờ" --> "Xóa cờ SR_STATUS_CHECK"
+    note right : SR &= ~SR_STATUS_CHECK
+    "Xóa cờ SR_STATUS_CHECK" --> "Gọi can_send_status_all()"
+    note right : Gửi heartbeat request
+    "Gọi can_send_status_all()" --> "Tạo RTR message"
+    note right : Request for Status từ tất cả slaves
+    "Tạo RTR message" --> "Gửi qua CAN bus"
+    note right : Broadcast STATUS request
+    "Gửi qua CAN bus" --> "Chờ phản hồi từ slaves"
+}
+
+partition "Xử lý phản hồi slaves" #lightcyan {
+    "Chờ phản hồi từ slaves" --> if "Slave nào phản hồi?" then
+        -->[SLAVE1] "Nhận response ID:0x301 (FMI=0)"
+        note right : Motor controller phản hồi
+        "Nhận response ID:0x301 (FMI=0)" --> "Xử lý data Slave1"
+        note right : [status, setpoint_MSB, setpoint_LSB]
+        "Xử lý data Slave1" --> "Cập nhật slave1_info"
+        note right : status + current_setpoint
+        "Cập nhật slave1_info" --> "Xác nhận kết nối Slave1"
+        note right : Slave1 còn hoạt động bình thường
+        "Xác nhận kết nối Slave1" --> "Đặt SR |= SR_CAN_RX"
+    else
+        -->[SLAVE2] "Nhận response ID:0x302 (FMI=4)"
+        note right : Buck converter phản hồi
+        "Nhận response ID:0x302 (FMI=4)" --> "Xử lý data Slave2"
+        note right : [status, setpoint_MSB, setpoint_LSB]
+        "Xử lý data Slave2" --> "Cập nhật slave2_info"
+        note right : status + current_setpoint
+        "Cập nhật slave2_info" --> "Xác nhận kết nối Slave2"
+        note right : Slave2 còn hoạt động bình thường
+        "Xác nhận kết nối Slave2" --> "Đặt SR |= SR_CAN_RX"
+    endif
+    
+    "Đặt SR |= SR_CAN_RX" --> "Kiểm tra hoàn tất"
+    note right : Chu kỳ heartbeat kết thúc
+}
+
+"Kiểm tra hoàn tất" --> if "Có lỗi kết nối?" then
+    -->[CÓ] "Hiển thị lỗi trên LCD"
+    note right : Status hiển thị "???" hoặc "ERR"
+    "Hiển thị lỗi trên LCD" --> "Tiếp tục heartbeat"
+    note right : Thử kết nối lại trong chu kỳ tiếp theo
+    "Tiếp tục heartbeat" --> "Timer4 đếm 1ms"
+else
+    -->[KHÔNG] "Kết nối bình thường"
+    note right : Tất cả slaves phản hồi tốt
+    "Kết nối bình thường" --> "Timer4 đếm 1ms"
+endif
+
+note bottom
+Tóm tắt kiểm tra kết nối:
+
+1. Khởi động: Kiểm tra ngay sau 100ms delay
+2. Định kỳ: Heartbeat mỗi 1 giây (1000ms)
+3. RTR Request: Broadcast CMD_STATUS_ALL yêu cầu trạng thái
+4. Response: Slaves phản hồi với status + setpoint hiện tại
+5. Health check: Phát hiện mất kết nối, lỗi communication
+
+Lịch trình heartbeat:
+- Startup: Ngay lập tức sau delay
+- Runtime: Mỗi 1000ms đều đặn
+- Response: Slaves phản hồi ngay lập tức
+- Display: LCD cập nhật trong chu kỳ 100ms
+
+Phát hiện lỗi:
+- Không có response: Hiển thị "???" 
+- Status error: Hiển thị "ERR"
+- Timeout: Setpoint hiển thị "---"
+- Recovery: Tự động thử lại chu kỳ tiếp theo
+
+Đặc điểm:
+- Non-blocking: Không làm trễ main loop
+- Robust: Hoạt động tốt kể cả khi mất kết nối tạm thời  
+- Efficient: Sử dụng RTR frame tiết kiệm bandwidth
+- Real-time: Phát hiện lỗi kết nối trong vòng 1 giây
+end note
+
+@enduml

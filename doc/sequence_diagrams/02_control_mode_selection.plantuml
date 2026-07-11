@@ -1,0 +1,140 @@
+@startuml control_mode_selection_activity
+
+header
+Name:        Control Mode Selection Activity Diagram (Legacy)
+Author:      STM32 CAN Master Team
+Version:     1.0
+Created:     2024-12-14
+Updated:     2024-12-14
+endheader
+
+title STM32 CAN Master - Sơ đồ hoạt động chọn chế độ điều khiển (UART ↔ ADC)
+
+legend bottom right
+Legend
+|<back:#lightpink>     | Nội bộ BINH |
+|<back:#white>     | COTS/Bên ngoài |
+|<back:#lightblue>    | Xử lý ngắt |
+|<back:#lightgreen>   | Xử lý chế độ |
+|<back:#lightyellow>  | Truyền CAN |
+|<back:#lightcyan>    | Cập nhật hiển thị |
+endlegend
+
+(*) --> "Người dùng nhấn nút MODE (PB10)"
+
+partition "Xử lý ngắt nút bấm" #lightblue {
+    "Người dùng nhấn nút MODE (PB10)" --> "Tạo ngắt EXTI10"
+    note right : GPIO PB10 kích hoạt ngắt ngoài
+    "Tạo ngắt EXTI10" --> "Kiểm tra EXTI->PR & EXTI_PR_PR10"
+    note right : Xác nhận nguồn ngắt từ PB10
+    "Kiểm tra EXTI->PR & EXTI_PR_PR10" --> "Xóa bit pending: EXTI->PR = EXTI_PR_PR10"
+    note right : Xóa cờ ngắt để sẵn sàng lần sau
+    "Xóa bit pending: EXTI->PR = EXTI_PR_PR10" --> "Đặt SR |= SR_BTN_MODE"
+    note right : Báo hiệu vòng lặp chính xử lý (bit 2 trong SR)
+    "Đặt SR |= SR_BTN_MODE" --> "Ngắt được xử lý"
+}
+
+partition "Xử lý vòng lặp chính" #lightgreen {
+    "Ngắt được xử lý" --> "Kiểm tra SR & SR_BTN_MODE"
+    note right : Vòng lặp chính phát hiện cờ nút MODE
+    "Kiểm tra SR & SR_BTN_MODE" --> "Xóa cờ: SR &= ~SR_BTN_MODE"
+    note right : Xóa cờ để tránh xử lý lặp lại
+    "Xóa cờ: SR &= ~SR_BTN_MODE" --> "Gọi button_debounce(&button_mode)"
+    note right : Kiểm tra chống nhiễu nút bấm
+    
+    "Gọi button_debounce(&button_mode)" --> "Đọc chân PB10 lần 1"
+    note right : gpio_read_pin(GPIOB, GPIO_PIN_10)
+    "Đọc chân PB10 lần 1" --> "Delay_ms(25) - chống nhiễu"
+    note right : Đợi 25ms để ổn định tín hiệu
+    "Delay_ms(25) - chống nhiễu" --> "Đọc chân PB10 lần 2"
+    note right : Xác nhận lại trạng thái nút
+    "Đọc chân PB10 lần 2" --> "Xác nhận nhấn nút hợp lệ"
+    note right : Cả 2 lần đọc đều là LOW
+}
+
+partition "Xử lý chuyển chế độ" #lightgreen {
+    "Xác nhận nhấn nút hợp lệ" --> "Gọi button_mode_handler()"
+    note right : Thực hiện chuyển đổi chế độ
+    "Gọi button_mode_handler()" --> "Kiểm tra current_mode hiện tại"
+    
+    "Kiểm tra current_mode hiện tại" --> if "Chế độ hiện tại?" then
+        -->[MODE_SETPOINT_UART] "Đặt current_mode = MODE_SETPOINT_ADC"
+        note right : Chuyển từ điều khiển UART sang ADC
+        "Đặt current_mode = MODE_SETPOINT_ADC" --> "Chế độ đã được chuyển"
+    else
+        -->[MODE_SETPOINT_ADC] "Đặt current_mode = MODE_SETPOINT_UART"
+        note right : Chuyển từ điều khiển ADC sang UART
+        "Đặt current_mode = MODE_SETPOINT_UART" --> "Chế độ đã được chuyển"
+    endif
+}
+
+partition "Cập nhật setpoint ngay lập tức" #lightyellow {
+    "Chế độ đã được chuyển" --> "Gọi send_setpoint_to_slaves()"
+    note right : Áp dụng setpoint với chế độ mới ngay
+    "Gọi send_setpoint_to_slaves()" --> "Tính toán giá trị setpoint"
+    
+    "Tính toán giá trị setpoint" --> if "Chế độ mới?" then
+        -->[ADC] "adc_val = master_ctrl.adc_value"
+        note right : Sử dụng giá trị ADC hiện tại (0-4090)
+        "adc_val = master_ctrl.adc_value" --> "Giá trị setpoint đã tính"
+    else
+        -->[UART] "adc_val = (uart_setpoint * 4090) / 100"
+        note right : Chuyển % UART thành giá trị ADC tương đương
+        "adc_val = (uart_setpoint * 4090) / 100" --> "Giá trị setpoint đã tính"
+    endif
+    
+    "Giá trị setpoint đã tính" --> "Kiểm tra control_target"
+    note right : Xác định gửi cho slave nào
+}
+
+partition "Gửi setpoint qua CAN" #lightyellow {
+    "Kiểm tra control_target" --> if "Target điều khiển?" then
+        -->[SLAVE1] "Gửi can_send_setpoint(1, adc_val)"
+        note right : Chỉ gửi cho Motor (RPM: adc_val*6000/4090)
+        "Gửi can_send_setpoint(1, adc_val)" --> "Setpoint đã được gửi"
+    else
+        --> if "Target SLAVE2?" then
+            -->[SLAVE2] "Gửi can_send_setpoint(2, adc_val)"
+            note right : Chỉ gửi cho Buck (Voltage: adc_val*900/4090)
+            "Gửi can_send_setpoint(2, adc_val)" --> "Setpoint đã được gửi"
+        else
+            -->[ALL] "Gửi can_send_setpoint_all(adc_val)"
+            note right : Gửi cho cả Motor và Buck cùng lúc
+            "Gửi can_send_setpoint_all(adc_val)" --> "Setpoint đã được gửi"
+        endif
+    endif
+}
+
+partition "Cập nhật hiển thị LCD" #lightcyan {
+    "Setpoint đã được gửi" --> "Đợi chu kỳ LCD tiếp theo (100ms)"
+    note right : Chờ cờ SR_LCD_UPDATE được đặt
+    "Đợi chu kỳ LCD tiếp theo (100ms)" --> "Gọi lcd_update_display()"
+    note right : Cập nhật màn hình với chế độ mới
+    "Gọi lcd_update_display()" --> "Cập nhật trường UART với dấu *"
+    note right : Hiện * nếu UART mode đang hoạt động
+    "Cập nhật trường UART với dấu *" --> "Cập nhật trường ADC với dấu *"
+    note right : Hiện * nếu ADC mode đang hoạt động
+    "Cập nhật trường ADC với dấu *" --> "Cập nhật hiển thị setpoint mới"
+    note right : Hiện giá trị setpoint theo chế độ hiện tại
+    "Cập nhật hiển thị setpoint mới" --> "Hiển thị đã cập nhật hoàn tất"
+    note right : Người dùng thấy chế độ mới trên LCD
+}
+
+"Hiển thị đã cập nhật hoàn tất" --> (*)
+
+note bottom
+Tóm tắt chuyển đổi chế độ điều khiển:
+
+1. Phát hiện nút: Ngắt EXTI10 từ PB10, chống nhiễu 25ms
+2. Chuyển chế độ: UART ↔ ADC (chuyển đổi qua lại)
+3. Áp dụng ngay: Tính toán và gửi setpoint với chế độ mới
+4. Gửi CAN: Theo control_target (Slave1/Slave2/All)
+5. Hiển thị: Cập nhật LCD với dấu * cho chế độ active
+
+Kết quả: 
+- Chế độ UART: Điều khiển bằng lệnh "Duty:XX" qua UART
+- Chế độ ADC: Điều khiển real-time bằng potentiometer
+- Setpoint được áp dụng ngay lập tức không cần khởi động lại
+end note
+
+@enduml

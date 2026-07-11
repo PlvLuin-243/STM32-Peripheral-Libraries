@@ -1,0 +1,138 @@
+@startuml status_monitoring_activity
+
+header
+Name:        Status Monitoring Activity Diagram (Legacy)
+Author:      STM32 CAN Master Team
+Version:     1.0
+Created:     2024-12-14
+Updated:     2024-12-14
+endheader
+
+title STM32 CAN Master - Sơ đồ giám sát trạng thái thời gian thực
+
+legend bottom right
+Legend
+|<back:#lightpink>     | Nội bộ BINH |
+|<back:#white>     | COTS/Bên ngoài |
+|<back:#lightblue>    | Nhận CAN |
+|<back:#lightgreen>   | Xử lý trạng thái |
+|<back:#lightyellow>  | Hiển thị LCD |
+endlegend
+
+(*) --> "Slaves truyền trạng thái liên tục"
+
+partition "Nhận dữ liệu CAN" #lightblue {
+    "Slaves truyền trạng thái liên tục" --> if "Slave nào truyền?" then
+        -->[SLAVE1] "Nhận frame ID:0x301 (Motor)"
+        note right : Data: [status, setpoint_MSB, setpoint_LSB]
+        "Nhận frame ID:0x301 (Motor)" --> "Áp dụng filter FB_SLAVE1 (FMI=0)"
+        note right : CAN hardware lọc frame
+        "Áp dụng filter FB_SLAVE1 (FMI=0)" --> "Gọi can_rx_callback(msg, fmi=0)"
+        "Gọi can_rx_callback(msg, fmi=0)" --> "Kiểm tra fmi == 0"
+        "Kiểm tra fmi == 0" --> "Validate length >= 3"
+        "Validate length >= 3" --> "Cập nhật slave1_info"
+        note right : status=data[0], setpoint=(data[1]<<8)|data[2]
+        "Cập nhật slave1_info" --> "Đặt SR |= SR_CAN_RX"
+    else
+        -->[SLAVE2] "Nhận frame ID:0x302 (Buck)"
+        note right : Data: [status, setpoint_MSB, setpoint_LSB]
+        "Nhận frame ID:0x302 (Buck)" --> "Áp dụng filter FB_SLAVE2 (FMI=4)"
+        "Áp dụng filter FB_SLAVE2 (FMI=4)" --> "Gọi can_rx_callback(msg, fmi=4)"
+        "Gọi can_rx_callback(msg, fmi=4)" --> "Kiểm tra fmi == 4"
+        "Kiểm tra fmi == 4" --> "Validate length >= 3"
+        "Validate length >= 3" --> "Cập nhật slave2_info"
+        note right : status=data[0], setpoint=(data[1]<<8)|data[2]
+        "Cập nhật slave2_info" --> "Đặt SR |= SR_CAN_RX"
+    endif
+}
+
+partition "Xử lý vòng lặp chính" #lightgreen {
+    "Đặt SR |= SR_CAN_RX" --> "Main loop kiểm tra SR_CAN_RX"
+    note right : Vòng lặp chính phát hiện dữ liệu CAN mới
+    "Main loop kiểm tra SR_CAN_RX" --> "Xóa cờ SR_CAN_RX"
+    note right : SR &= ~SR_CAN_RX, dữ liệu đã được callback cập nhật
+    "Xóa cờ SR_CAN_RX" --> "Chờ chu kỳ LCD (100ms)"
+}
+
+partition "Cập nhật hiển thị LCD" #lightyellow {
+    "Chờ chu kỳ LCD (100ms)" --> "Kiểm tra SR_LCD_UPDATE"
+    note right : Chu kỳ 100ms để refresh màn hình
+    "Kiểm tra SR_LCD_UPDATE" --> "Gọi lcd_update_display()"
+    note right : Cập nhật toàn bộ thông tin hiển thị
+    
+    "Gọi lcd_update_display()" --> "Đọc slave1_info.status"
+    note right : Lấy trạng thái hiện tại của Motor
+    "Đọc slave1_info.status" --> if "Trạng thái Slave1?" then
+        -->[IDLE (0x00)] "Hiển thị ' -- ' tại (0,6)"
+        note right : Motor không hoạt động
+        "Hiển thị ' -- ' tại (0,6)" --> "Đọc slave2_info.status"
+    else
+        -->[RUN (0x01)] "Hiển thị 'RUN ' tại (0,6)"
+        note right : Motor đang chạy
+        "Hiển thị 'RUN ' tại (0,6)" --> "Đọc slave2_info.status"
+    endif
+    
+    "Đọc slave2_info.status" --> if "Trạng thái Slave2?" then
+        -->[IDLE (0x00)] "Hiển thị ' -- ' tại (0,16)"
+        note right : Buck converter không hoạt động
+        "Hiển thị ' -- ' tại (0,16)" --> "Hiển thị setpoint Slave1"
+    else
+        -->[RUN (0x01)] "Hiển thị 'RUN ' tại (0,16)"
+        note right : Buck converter đang chạy
+        "Hiển thị 'RUN ' tại (0,16)" --> "Hiển thị setpoint Slave1"
+    endif
+    
+    "Hiển thị setpoint Slave1" --> "Đọc slave1_info.current_setpoint"
+    note right : RPM feedback từ Motor
+    "Đọc slave1_info.current_setpoint" --> if "RPM == 0 và IDLE?" then
+        -->[CÓ] "Hiển thị '---' tại (1,5)"
+        note right : Không có giá trị RPM
+        "Hiển thị '---' tại (1,5)" --> "Hiển thị setpoint Slave2"
+    else
+        -->[KHÔNG] "Hiển thị giá trị RPM tại (1,5)"
+        note right : Hiện tốc độ thực tế 0-6000 RPM
+        "Hiển thị giá trị RPM tại (1,5)" --> "Hiển thị setpoint Slave2"
+    endif
+    
+    "Hiển thị setpoint Slave2" --> "Đọc slave2_info.current_setpoint"
+    note right : Voltage feedback từ Buck (0.01V units)
+    "Đọc slave2_info.current_setpoint" --> if "Voltage == 0 và IDLE?" then
+        -->[CÓ] "Hiển thị '---' tại (1,16)"
+        note right : Không có giá trị điện áp
+        "Hiển thị '---' tại (1,16)" --> "LCD update hoàn tất"
+    else
+        -->[KHÔNG] "Chuyển đổi xx.x V và hiển thị tại (1,16)"
+        note right : Hiện điện áp thực tế 0-9.00V
+        "Chuyển đổi xx.x V và hiển thị tại (1,16)" --> "LCD update hoàn tất"
+    endif
+}
+
+"LCD update hoàn tất" --> "Slaves truyền trạng thái liên tục"
+note right : Chu trình lặp liên tục, real-time monitoring
+
+note bottom
+Tóm tắt giám sát trạng thái:
+
+1. Nhận liên tục: Slaves tự động truyền status qua CAN (ID 0x301/0x302)
+2. Filter CAN: Hardware lọc frame theo FMI (0=Slave1, 4=Slave2)
+3. Callback xử lý: can_rx_callback() cập nhật slave_info ngay lập tức
+4. Main loop: Xóa cờ CAN_RX, chờ chu kỳ LCD
+5. LCD refresh: Mỗi 100ms cập nhật màn hình với trạng thái mới
+
+Thông tin hiển thị:
+- Slave1 (Motor): Status (--/RUN/STOP/ERR) + RPM feedback
+- Slave2 (Buck): Status (--/RUN/STOP/ERR) + Voltage feedback
+- Real-time: Trạng thái cập nhật ngay khi slaves truyền
+
+Status codes:
+- 0x00: IDLE (--), 0x01: RUNNING (RUN)
+- 0x02: STOPPED (STOP), 0xFF: ERROR (ERR)
+
+Đặc điểm:
+- Hardware filtering: CAN controller tự động phân loại frame
+- Immediate update: Callback cập nhật ngay không chờ main loop  
+- Visual feedback: LCD hiển thị trạng thái và setpoint thực tế
+- Error detection: Phát hiện lỗi giao tiếp và device error
+end note
+
+@enduml

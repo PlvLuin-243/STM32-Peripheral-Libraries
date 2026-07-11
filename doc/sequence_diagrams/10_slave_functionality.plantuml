@@ -1,0 +1,120 @@
+@startuml slave_functionality_activity
+
+header
+Name:        CAN Slave Functionality Activity Diagram (Legacy) - Separated Functions
+Author:      STM32 CAN Slave Team
+Version:     1.0
+Created:     2024-12-14
+Updated:     2024-12-14
+endheader
+
+title STM32 CAN Slave - Tách từng chức năng chính
+
+legend bottom right
+Legend
+|<back:#lightblue>    | Khởi tạo |
+|<back:#orange>       | Timer |
+|<back:#lightgreen>   | Main Loop |
+|<back:#lightcyan>    | CAN START |
+|<back:#pink>         | CAN STOP |
+|<back:#lightyellow>  | CAN SETPOINT |
+|<back:#lightgray>    | CAN STATUS |
+endlegend
+
+(*) --> "System Init"
+
+partition "1. Khởi tạo System" #lightblue {
+    "System Init" --> "GPIO + LED Init"
+    "GPIO + LED Init" --> "Hardware Init (Motor/Buck)"
+    "Hardware Init (Motor/Buck)" --> "PID Controller Init"
+    "PID Controller Init" --> "CAN Filters Setup"
+    "CAN Filters Setup" --> "Timer2 Start 1ms"
+    "Timer2 Start 1ms" --> "Enter Main Loop"
+}
+
+partition "2. Timer IRQ Handler" #orange {
+    "Timer2 1ms IRQ" --> "Set mode_update_flag = 1"
+    note right : Trigger control task
+    "Set mode_update_flag = 1" --> "Check stop_feedback_timer"
+    "Check stop_feedback_timer" --> if "timer > 0 && counter % 100 == 0?" then
+        -->[YES] "Auto send feedback"
+        "Auto send feedback" --> "Return from IRQ"
+    else
+        -->[NO] "Return from IRQ"
+    endif
+    "Return from IRQ" --> "Timer2 1ms IRQ"
+}
+
+partition "3. Main Loop Task" #lightgreen {
+    "Enter Main Loop" --> "while(1) Wait for flag"
+    "while(1) Wait for flag" --> if "mode_update_flag == 1?" then
+        -->[YES] "Call slave_control_task()"
+        "Call slave_control_task()" --> "Read Feedback (RPM/ADC)"
+        "Read Feedback (RPM/ADC)" --> "Process Ramping"
+        "Process Ramping" --> "Run PID Controller"
+        "Run PID Controller" --> "Output PWM"
+        "Output PWM" --> "Clear flag = 0"
+        "Clear flag = 0" --> "while(1) Wait for flag"
+    else
+        -->[NO] "while(1) Wait for flag"
+    endif
+}
+
+partition "4. CAN START Command" #lightcyan {
+    "Receive START" --> "Set system_running = true"
+    "Set system_running = true" --> "Set status = RUNNING"
+    "Set status = RUNNING" --> "LED ON (PC13 = LOW)"
+    "LED ON (PC13 = LOW)" --> "Send START feedback"
+    "Send START feedback" --> "Return to main"
+}
+
+partition "5. CAN STOP Command" #pink {
+    "Receive STOP" --> "Set stop_mode = true"
+    "Set stop_mode = true" --> "Set target_setpoint = 0"
+    "Set target_setpoint = 0" --> "Set status = STOPPED"
+    "Set status = STOPPED" --> "LED OFF (PC13 = HIGH)"
+    "LED OFF (PC13 = HIGH)" --> "Start stop_feedback_timer"
+    "Start stop_feedback_timer" --> "Send STOP feedback"
+    "Send STOP feedback" --> "Return to main"
+}
+
+partition "6. CAN SETPOINT Command" #lightyellow {
+    "Receive SETPOINT" --> "Extract setpoint value"
+    "Extract setpoint value" --> if "system_running == true?" then
+        -->[YES] "Update target_setpoint"
+        "Update target_setpoint" --> "Clear stop_mode"
+        "Clear stop_mode" --> "Set status = RUNNING"
+        "Set status = RUNNING" --> "Send SETPOINT feedback"
+        "Send SETPOINT feedback" --> "Return to main"
+    else
+        -->[NO] "Save setpoint only"
+        "Save setpoint only" --> "Keep status = STOPPED"
+        "Keep status = STOPPED" --> "Send STOPPED feedback"
+        "Send STOPPED feedback" --> "Return to main"
+    endif
+}
+
+partition "7. CAN STATUS Command" #lightgray {
+    "Receive STATUS" --> "Prepare status message"
+    "Prepare status message" --> "Add current measurement"
+    "Add current measurement" --> "Send STATUS feedback"
+    "Send STATUS feedback" --> "Return to main"
+}
+
+"Return to main" --> "while(1) Wait for flag"
+
+note bottom
+**Chức năng tách biệt rõ ràng:**
+
+**1. Khởi tạo:** GPIO → Hardware → PID → CAN → Timer → Main Loop
+**2. Timer:** Set flag mỗi 1ms + Auto feedback khi stop  
+**3. Main Loop:** Chờ flag → Control task → PID → PWM → Clear flag
+**4. START:** system_running=true + LED ON + Feedback
+**5. STOP:** stop_mode=true + LED OFF + Auto feedback timer
+**6. SETPOINT:** Cập nhật target (chỉ khi running) + Feedback  
+**7. STATUS:** Gửi ngay current status + measurement
+
+Mỗi chức năng độc lập, rõ ràng về input/output và trách nhiệm
+end note
+
+@enduml

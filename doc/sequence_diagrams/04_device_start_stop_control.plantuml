@@ -1,0 +1,163 @@
+@startuml device_start_stop_control_activity
+
+header
+Name:        Device Start/Stop Control Activity Diagram (Legacy)
+Author:      STM32 CAN Master Team
+Version:     1.0
+Created:     2024-12-14
+Updated:     2024-12-14
+endheader
+
+title STM32 CAN Master - Sơ đồ hoạt động điều khiển bật/tắt thiết bị
+
+legend bottom right
+Legend
+|<back:#lightpink>     | Nội bộ BINH |
+|<back:#white>     | COTS/Bên ngoài |
+|<back:#lightblue>    | Xử lý ngắt |
+|<back:#lightgreen>   | Xử lý lệnh |
+|<back:#lightyellow>  | Truyền CAN |
+|<back:#lightcyan>    | Cập nhật trạng thái |
+endlegend
+
+(*) --> "Người dùng nhấn nút SLAVE1/SLAVE2 (PB0/PB1)"
+
+partition "Xử lý ngắt nút bấm" #lightblue {
+    "Người dùng nhấn nút SLAVE1/SLAVE2 (PB0/PB1)" --> if "Nút nào được nhấn?" then
+        -->[PB0] "Tạo ngắt EXTI0"
+        note right : GPIO PB0 cho SLAVE1 (Motor)
+        "Tạo ngắt EXTI0" --> "Kiểm tra EXTI->PR & EXTI_PR_PR0"
+        "Kiểm tra EXTI->PR & EXTI_PR_PR0" --> "Xóa bit pending PR0"
+        "Xóa bit pending PR0" --> "Đặt SR |= SR_BTN_SLAVE1"
+        note right : Báo hiệu vòng lặp chính (bit 0 trong SR)
+        "Đặt SR |= SR_BTN_SLAVE1" --> "Ngắt được xử lý"
+    else
+        -->[PB1] "Tạo ngắt EXTI1"
+        note right : GPIO PB1 cho SLAVE2 (Buck)
+        "Tạo ngắt EXTI1" --> "Kiểm tra EXTI->PR & EXTI_PR_PR1"
+        "Kiểm tra EXTI->PR & EXTI_PR_PR1" --> "Xóa bit pending PR1"
+        "Xóa bit pending PR1" --> "Đặt SR |= SR_BTN_SLAVE2"
+        note right : Báo hiệu vòng lặp chính (bit 1 trong SR)
+        "Đặt SR |= SR_BTN_SLAVE2" --> "Ngắt được xử lý"
+    endif
+}
+
+partition "Xử lý vòng lặp chính" #lightgreen {
+    "Ngắt được xử lý" --> "Kiểm tra cờ SR"
+    note right : Vòng lặp chính phát hiện cờ nút bấm
+    "Kiểm tra cờ SR" --> "Xóa cờ tương ứng"
+    note right : Xóa cờ để tránh xử lý lặp lại
+    "Xóa cờ tương ứng" --> "Gọi button_debounce()"
+    note right : Kiểm tra chống nhiễu nút bấm
+    
+    "Gọi button_debounce()" --> "Đọc chân GPIO lần 1"
+    note right : gpio_read_pin() kiểm tra trạng thái
+    "Đọc chân GPIO lần 1" --> "Delay_ms(25) - chống nhiễu"
+    note right : Đợi 25ms để ổn định tín hiệu
+    "Delay_ms(25) - chống nhiễu" --> "Đọc chân GPIO lần 2"
+    note right : Xác nhận lại trạng thái nút
+    "Đọc chân GPIO lần 2" --> "Xác nhận nhấn nút hợp lệ"
+    note right : Cả 2 lần đọc đều là LOW
+}
+
+partition "Xử lý lệnh START/STOP" #lightgreen {
+    "Xác nhận nhấn nút hợp lệ" --> "Gọi button_slave1/2_handler()"
+    note right : Thực hiện lệnh bật/tắt thiết bị
+    "Gọi button_slave1/2_handler()" --> "Kiểm tra trạng thái slave hiện tại"
+    note right : Đọc slave_info.status (0x00/0x01/0x02/0xFF)
+    
+    "Kiểm tra trạng thái slave hiện tại" --> if "Trạng thái hiện tại?" then
+        -->[RUNNING (0x01)] "Chuẩn bị lệnh STOP"
+        note right : Slave đang chạy, gửi lệnh dừng
+        "Chuẩn bị lệnh STOP" --> "Gửi CMD_STOP_SLAVE1/2 qua CAN"
+        note right : ID=CMD_STOP, RTR=false, length=0
+        "Gửi CMD_STOP_SLAVE1/2 qua CAN" --> "Slave xử lý lệnh STOP"
+        note right : Slave chuyển status = STATUS_STOPPED (0x02)
+        "Slave xử lý lệnh STOP" --> "Lệnh STOP hoàn tất"
+    else
+        -->[STOPPED/IDLE] "Chuẩn bị lệnh START"
+        note right : Slave đang dừng hoặc chờ, gửi lệnh khởi động
+        "Chuẩn bị lệnh START" --> "Gửi CMD_START_SLAVE1/2 qua CAN"
+        note right : ID=CMD_START, RTR=false, length=0
+        "Gửi CMD_START_SLAVE1/2 qua CAN" --> "Slave xử lý lệnh START"
+        note right : Slave chuyển status = STATUS_RUNNING (0x01)
+        "Slave xử lý lệnh START" --> "Delay_ms(10) - chờ xử lý START"
+        note right : Cho slave thời gian khởi động
+        "Delay_ms(10) - chờ xử lý START" --> "Tính toán setpoint ban đầu"
+    endif
+}
+
+partition "Gửi setpoint ban đầu (chỉ sau START)" #lightyellow {
+    "Tính toán setpoint ban đầu" --> if "Chế độ hiện tại?" then
+        -->[ADC] "adc_val = master_ctrl.adc_value"
+        note right : Sử dụng giá trị ADC hiện tại (0-4090)
+        "adc_val = master_ctrl.adc_value" --> "Giá trị setpoint đã tính"
+    else
+        -->[UART] "adc_val = (uart_setpoint * 4090) / 100"
+        note right : Chuyển % UART thành giá trị ADC tương đương
+        "adc_val = (uart_setpoint * 4090) / 100" --> "Giá trị setpoint đã tính"
+    endif
+    
+    "Giá trị setpoint đã tính" --> "Gửi can_send_setpoint()"
+    note right : Gửi setpoint cho slave vừa START
+    "Gửi can_send_setpoint()" --> if "Slave nào?" then
+        -->[SLAVE1] "Chuyển đổi sang RPM: (adc_val * 6000) / 4090"
+        note right : Motor: giá trị RPM 0-6000
+        "Chuyển đổi sang RPM: (adc_val * 6000) / 4090" --> "Gửi CMD_SETPOINT_SLAVE1"
+        note right : Data=[RPM_MSB, RPM_LSB], length=2
+        "Gửi CMD_SETPOINT_SLAVE1" --> "Slave áp dụng setpoint RPM"
+        "Slave áp dụng setpoint RPM" --> "Setpoint ban đầu đã gửi"
+    else
+        -->[SLAVE2] "Chuyển đổi sang Voltage: (adc_val * 900) / 4090"
+        note right : Buck: giá trị điện áp 0-9.00V (đơn vị 0.01V)
+        "Chuyển đổi sang Voltage: (adc_val * 900) / 4090" --> "Gửi CMD_SETPOINT_SLAVE2"
+        note right : Data=[VOLT_MSB, VOLT_LSB], length=2
+        "Gửi CMD_SETPOINT_SLAVE2" --> "Slave áp dụng setpoint Voltage"
+        "Slave áp dụng setpoint Voltage" --> "Setpoint ban đầu đã gửi"
+    endif
+    
+    "Setpoint ban đầu đã gửi" --> "Lệnh START hoàn tất"
+}
+
+partition "Cập nhật trạng thái và hiển thị" #lightcyan {
+    "Lệnh STOP hoàn tất" --> "Slave gửi phản hồi trạng thái"
+    "Lệnh START hoàn tất" --> "Slave gửi phản hồi trạng thái"
+    note right : Slave báo cáo trạng thái mới qua CAN
+    "Slave gửi phản hồi trạng thái" --> "can_rx_callback() được gọi"
+    note right : Cập nhật slave_info.status và current_setpoint
+    "can_rx_callback() được gọi" --> "Đặt SR |= SR_CAN_RX"
+    note right : Báo hiệu có dữ liệu CAN mới
+    
+    "Đặt SR |= SR_CAN_RX" --> "Đợi chu kỳ LCD tiếp theo (100ms)"
+    note right : Chờ cờ SR_LCD_UPDATE được đặt
+    "Đợi chu kỳ LCD tiếp theo (100ms)" --> "Gọi lcd_update_display()"
+    note right : Cập nhật màn hình với trạng thái mới
+    "Gọi lcd_update_display()" --> "Cập nhật hiển thị trạng thái"
+    note right : Hiện RUN/STOP/ERR cho từng slave
+    "Cập nhật hiển thị trạng thái" --> "Cập nhật hiển thị setpoint hiện tại"
+    note right : Hiện giá trị RPM/Voltage thực tế
+    "Cập nhật hiển thị setpoint hiện tại" --> "Hiển thị đã cập nhật hoàn tất"
+    note right : Người dùng thấy trạng thái mới trên LCD
+}
+
+"Hiển thị đã cập nhật hoàn tất" --> (*)
+
+note bottom
+Tóm tắt điều khiển bật/tắt thiết bị:
+
+1. Phát hiện nút: EXTI0 (PB0-SLAVE1) hoặc EXTI1 (PB1-SLAVE2)
+2. Chống nhiễu: Đọc 2 lần với delay 25ms
+3. Kiểm tra trạng thái: RUNNING → STOP, STOPPED/IDLE → START
+4. Gửi lệnh CAN: CMD_START/STOP với ID tương ứng
+5. Setpoint ban đầu: Chỉ gửi sau START (RPM cho Motor, Voltage cho Buck)
+6. Phản hồi: Slave báo trạng thái mới qua CAN
+7. Hiển thị: LCD cập nhật trạng thái và setpoint thực tế
+
+Đặc điểm:
+- SLAVE1 (Motor): RPM 0-6000, điều khiển tốc độ
+- SLAVE2 (Buck): Voltage 0-9.00V, điều khiển điện áp
+- START kèm setpoint: Thiết bị hoạt động ngay với giá trị đặt
+- Real-time feedback: Trạng thái hiện tại hiển thị trên LCD
+end note
+
+@enduml

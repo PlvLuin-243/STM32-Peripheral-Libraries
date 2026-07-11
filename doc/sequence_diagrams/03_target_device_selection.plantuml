@@ -1,0 +1,131 @@
+@startuml target_device_selection_activity
+
+header
+Name:        Target Device Selection Activity Diagram (Legacy)
+Author:      STM32 CAN Master Team
+Version:     1.0
+Created:     2024-12-14
+Updated:     2024-12-14
+endheader
+
+title STM32 CAN Master - Sơ đồ hoạt động chọn thiết bị mục tiêu (Slave1 → Slave2 → All)
+
+legend bottom right
+Legend
+|<back:#lightpink>     | Nội bộ BINH |
+|<back:#white>     | COTS/Bên ngoài |
+|<back:#lightblue>    | Xử lý ngắt |
+|<back:#lightgreen>   | Chọn target |
+|<back:#lightyellow>  | Tính toán cycling |
+|<back:#lightcyan>    | Cập nhật hiển thị |
+endlegend
+
+(*) --> "Người dùng nhấn nút CONTROL (PB11)"
+
+partition "Xử lý ngắt nút bấm" #lightblue {
+    "Người dùng nhấn nút CONTROL (PB11)" --> "Tạo ngắt EXTI11"
+    note right : GPIO PB11 kích hoạt ngắt ngoài
+    "Tạo ngắt EXTI11" --> "Kiểm tra EXTI->PR & EXTI_PR_PR11"
+    note right : Xác nhận nguồn ngắt từ PB11
+    "Kiểm tra EXTI->PR & EXTI_PR_PR11" --> "Xóa bit pending: EXTI->PR = EXTI_PR_PR11"
+    note right : Xóa cờ ngắt để sẵn sàng lần sau
+    "Xóa bit pending: EXTI->PR = EXTI_PR_PR11" --> "Đặt SR |= SR_BTN_CONTROL"
+    note right : Báo hiệu vòng lặp chính xử lý (bit 3 trong SR)
+    "Đặt SR |= SR_BTN_CONTROL" --> "Ngắt được xử lý"
+}
+
+partition "Xử lý vòng lặp chính" #lightgreen {
+    "Ngắt được xử lý" --> "Kiểm tra SR & SR_BTN_CONTROL"
+    note right : Vòng lặp chính phát hiện cờ nút CONTROL
+    "Kiểm tra SR & SR_BTN_CONTROL" --> "Xóa cờ: SR &= ~SR_BTN_CONTROL"
+    note right : Xóa cờ để tránh xử lý lặp lại
+    "Xóa cờ: SR &= ~SR_BTN_CONTROL" --> "Gọi button_debounce(&button_control)"
+    note right : Kiểm tra chống nhiễu nút bấm
+    
+    "Gọi button_debounce(&button_control)" --> "Đọc chân PB11 lần 1"
+    note right : gpio_read_pin(GPIOB, GPIO_PIN_11)
+    "Đọc chân PB11 lần 1" --> "Delay_ms(25) - chống nhiễu"
+    note right : Đợi 25ms để ổn định tín hiệu
+    "Delay_ms(25) - chống nhiễu" --> "Đọc chân PB11 lần 2"
+    note right : Xác nhận lại trạng thái nút
+    "Đọc chân PB11 lần 2" --> "Xác nhận nhấn nút hợp lệ"
+    note right : Cả 2 lần đọc đều là LOW
+}
+
+partition "Xử lý chọn target cycling" #lightyellow {
+    "Xác nhận nhấn nút hợp lệ" --> "Gọi button_control_handler()"
+    note right : Thực hiện chu kỳ chọn thiết bị mục tiêu
+    "Gọi button_control_handler()" --> "Đọc master_ctrl.control_target hiện tại"
+    note right : Kiểm tra giá trị target hiện tại (0/1/2)
+    
+    "Đọc master_ctrl.control_target hiện tại" --> if "Target hiện tại?" then
+        -->[ALL (2)] "Tính toán: (2 + 2) % 3 = 1"
+        note right : Từ ALL chuyển sang SLAVE2
+        "Tính toán: (2 + 2) % 3 = 1" --> "Đặt control_target = CONTROL_TARGET_SLAVE2"
+        note right : Chỉ điều khiển Buck converter
+        "Đặt control_target = CONTROL_TARGET_SLAVE2" --> "Target đã được cập nhật"
+    else
+        --> if "Target SLAVE2?" then
+            -->[SLAVE2 (1)] "Tính toán: (1 + 2) % 3 = 0"
+            note right : Từ SLAVE2 chuyển sang SLAVE1
+            "Tính toán: (1 + 2) % 3 = 0" --> "Đặt control_target = CONTROL_TARGET_SLAVE1"
+            note right : Chỉ điều khiển Motor
+            "Đặt control_target = CONTROL_TARGET_SLAVE1" --> "Target đã được cập nhật"
+        else
+            -->[SLAVE1 (0)] "Tính toán: (0 + 2) % 3 = 2"
+            note right : Từ SLAVE1 chuyển về ALL
+            "Tính toán: (0 + 2) % 3 = 2" --> "Đặt control_target = CONTROL_TARGET_ALL"
+            note right : Điều khiển cả Motor và Buck
+            "Đặt control_target = CONTROL_TARGET_ALL" --> "Target đã được cập nhật"
+        endif
+    endif
+}
+
+partition "Cập nhật hiển thị LCD" #lightcyan {
+    "Target đã được cập nhật" --> "Đợi chu kỳ LCD tiếp theo (100ms)"
+    note right : Chờ cờ SR_LCD_UPDATE được đặt
+    "Đợi chu kỳ LCD tiếp theo (100ms)" --> "Gọi lcd_update_display()"
+    note right : Cập nhật màn hình với target mới
+    "Gọi lcd_update_display()" --> "Kiểm tra control_target mới"
+    
+    "Kiểm tra control_target mới" --> if "Target mới?" then
+        -->[SLAVE1] "Hiển thị RPM với dấu *"
+        note right : Chỉ Motor active, Buck inactive
+        "Hiển thị RPM với dấu *" --> "Hiển thị VOLT không có dấu *"
+        "Hiển thị VOLT không có dấu *" --> "Hiển thị đã cập nhật"
+    else
+        --> if "Target SLAVE2?" then
+            -->[SLAVE2] "Hiển thị RPM không có dấu *"
+            note right : Motor inactive, chỉ Buck active
+            "Hiển thị RPM không có dấu *" --> "Hiển thị VOLT với dấu *"
+            "Hiển thị VOLT với dấu *" --> "Hiển thị đã cập nhật"
+        else
+            -->[ALL] "Hiển thị RPM với dấu *"
+            note right : Cả Motor và Buck đều active
+            "Hiển thị RPM với dấu *" --> "Hiển thị VOLT với dấu *"
+            "Hiển thị VOLT với dấu *" --> "Hiển thị đã cập nhật"
+        endif
+    endif
+}
+
+"Hiển thị đã cập nhật" --> (*)
+
+note bottom
+Tóm tắt chu kỳ chọn thiết bị mục tiêu:
+
+1. Phát hiện nút: Ngắt EXTI11 từ PB11, chống nhiễu 25ms
+2. Chu kỳ target: ALL(2) → SLAVE2(1) → SLAVE1(0) → ALL(2)
+3. Công thức: control_target = (current + 2) % 3
+4. Hiển thị: Dấu * cho thiết bị được điều khiển
+5. Ảnh hưởng: Setpoint chỉ gửi cho target được chọn
+
+Các chế độ target:
+- SLAVE1 (0): Chỉ điều khiển Motor (RPM)
+- SLAVE2 (1): Chỉ điều khiển Buck converter (Voltage)  
+- ALL (2): Điều khiển cả Motor và Buck cùng lúc
+
+Kết quả: Người dùng có thể chọn điều khiển riêng lẻ 
+hoặc đồng thời cả 2 thiết bị slave
+end note
+
+@enduml

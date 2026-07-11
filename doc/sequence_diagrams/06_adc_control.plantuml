@@ -1,0 +1,159 @@
+@startuml adc_control_activity
+
+header
+Name:        ADC Control Activity Diagram (Legacy)
+Author:      STM32 CAN Master Team
+Version:     1.0
+Created:     2024-12-14
+Updated:     2024-12-14
+endheader
+
+title STM32 CAN Master - Sơ đồ hoạt động điều khiển ADC (Đầu vào Potentiometer)
+
+legend bottom right
+Legend
+|<back:#lightpink>     | Nội bộ BINH |
+|<back:#white>     | COTS/Bên ngoài |
+|<back:#lightblue>    | Lấy mẫu ADC liên tục |
+|<back:#lightgreen>   | Xử lý Timer 100ms |
+|<back:#lightyellow>  | Xử lý giá trị ADC |
+|<back:#lightcyan>    | Cập nhật hiển thị |
+|<back:#lightgray>    | Gửi setpoint |
+endlegend
+
+(*) --> "Khởi tạo ADC và DMA"
+
+partition "Lấy mẫu ADC liên tục" #lightblue {
+    "Khởi tạo ADC và DMA" --> "Potentiometer tạo điện áp analog"
+    note right : Điện áp 0V - 3.3V từ biến trở
+    "Potentiometer tạo điện áp analog" --> "PA1 nhận tín hiệu analog"
+    note right : Chân PA1 kết nối với ADC1 Channel 1
+    "PA1 nhận tín hiệu analog" --> "ADC1 chuyển đổi liên tục"
+    note right : Continuous conversion mode, tần số cao
+    "ADC1 chuyển đổi liên tục" --> "Chuyển analog sang digital (0-4090)"
+    note right : 12-bit ADC resolution, phạm vi 0-4090
+    "Chuyển analog sang digital (0-4090)" --> "Kích hoạt DMA1_Channel1"
+    note right : Auto transfer sau mỗi conversion
+    "Kích hoạt DMA1_Channel1" --> "Lưu vào adc_value global"
+    note right : DMA tự động cập nhật biến toàn cục
+    "Lưu vào adc_value global" --> "ADC1 chuyển đổi liên tục"
+    note left : Vòng lặp liên tục, sampling real-time
+}
+
+partition "Bộ đếm thời gian 100ms" #lightgreen {
+    "Khởi tạo ADC và DMA" --> "Timer4 tạo ngắt 1ms"
+    note right : Timer4 IRQ callback mỗi 1ms
+    "Timer4 tạo ngắt 1ms" --> "Tăng lcd_update_counter"
+    note right : Đếm từ 0 đến 100
+    "Tăng lcd_update_counter" --> if "lcd_update_counter >= 100?" then
+        -->[CÓ] "Đặt SR |= SR_ADC_UPDATE"
+        note right : Báo hiệu main loop (bit 5 trong SR)
+        "Đặt SR |= SR_ADC_UPDATE" --> "Reset counter = 0"
+        note right : Chuẩn bị cho chu kỳ 100ms tiếp theo
+        "Reset counter = 0" --> "Timer4 tạo ngắt 1ms"
+    else
+        -->[CHƯA] "Timer4 tạo ngắt 1ms"
+        note right : Tiếp tục đếm
+    endif
+}
+
+partition "Xử lý vòng lặp chính" #lightyellow {
+    "Đặt SR |= SR_ADC_UPDATE" --> "Main loop kiểm tra SR_ADC_UPDATE"
+    note right : Vòng lặp chính phát hiện cờ ADC
+    "Main loop kiểm tra SR_ADC_UPDATE" --> "Xóa cờ SR_ADC_UPDATE"
+    note right : SR &= ~SR_ADC_UPDATE
+    "Xóa cờ SR_ADC_UPDATE" --> "Gọi adc_process()"
+    note right : Bắt đầu xử lý giá trị ADC mới
+    "Gọi adc_process()" --> "Đọc adc_value hiện tại"
+    note right : Lấy giá trị từ DMA (0-4090)
+    "Đọc adc_value hiện tại" --> "Cập nhật master_ctrl.adc_value"
+    note right : Lưu giá trị raw ADC
+    
+    "Cập nhật master_ctrl.adc_value" --> "Tính phần trăm: (adc_value * 100) / 4090"
+    note right : Chuyển đổi sang % (0-100)
+    "Tính phần trăm: (adc_value * 100) / 4090" --> if "Percentage > 100?" then
+        -->[CÓ] "Giới hạn = 100% (clamp)"
+        note right : Đảm bảo không vượt quá 100%
+        "Giới hạn = 100% (clamp)" --> "Lưu master_ctrl.adc_setpoint"
+    else
+        -->[KHÔNG] "Lưu master_ctrl.adc_setpoint"
+        note right : Sử dụng giá trị tính toán
+    endif
+    
+    "Lưu master_ctrl.adc_setpoint" --> "ADC processing hoàn tất"
+}
+
+partition "Cập nhật LCD" #lightcyan {
+    "ADC processing hoàn tất" --> if "Có cờ SR_LCD_UPDATE?" then
+        -->[CÓ] "Gọi lcd_update_display()"
+        note right : Cập nhật màn hình hiển thị
+        "Gọi lcd_update_display()" --> "Cập nhật % ADC trên LCD"
+        note right : Hiện giá trị phần trăm hiện tại
+        "Cập nhật % ADC trên LCD" --> if "current_mode == ADC?" then
+            -->[CÓ] "Thêm dấu * indicator"
+            note right : Báo hiệu đang ở chế độ ADC
+            "Thêm dấu * indicator" --> "Tính RPM display"
+            note right : (adc_setpoint * 6000) / 100
+            "Tính RPM display" --> "Tính Voltage display"
+            note right : (adc_setpoint * 9.00) / 100
+            "Tính Voltage display" --> "Hiện cả 2 với * theo target"
+            note right : Hiện * cho slave đang được điều khiển
+            "Hiện cả 2 với * theo target" --> "LCD update hoàn tất"
+        else
+            -->[KHÔNG] "LCD update hoàn tất"
+            note right : Chỉ hiện % không có indicator
+        endif
+    else
+        -->[KHÔNG] "Kiểm tra cờ setpoint update"
+    endif
+}
+
+partition "Gửi setpoint" #lightgray {
+    "LCD update hoàn tất" --> "Kiểm tra cờ setpoint update"
+    "Kiểm tra cờ setpoint update" --> if "Có cờ SR_SETPOINT_UPDATE?" then
+        -->[CÓ] "Gọi send_setpoint_to_running_slaves()"
+        note right : Gửi setpoint cho slaves đang chạy
+        "Gọi send_setpoint_to_running_slaves()" --> if "Mode ADC và slaves running?" then
+            -->[CÓ] "Sử dụng master_ctrl.adc_value"
+            note right : Dùng giá trị ADC làm nguồn setpoint
+            "Sử dụng master_ctrl.adc_value" --> "Chuyển đổi sang RPM/Voltage"
+            note right : RPM: (adc*6000)/4090, Volt: (adc*900)/4090
+            "Chuyển đổi sang RPM/Voltage" --> "Gửi CAN messages"
+            note right : CMD_SETPOINT_SLAVE1/2 với giá trị mới
+            "Gửi CAN messages" --> "Setpoint update hoàn tất"
+        else
+            -->[KHÔNG] "Setpoint update hoàn tất"
+            note right : Bỏ qua nếu không ở chế độ ADC
+        endif
+    else
+        -->[KHÔNG] "Setpoint update hoàn tất"
+    endif
+}
+
+"Setpoint update hoàn tất" --> "Chờ chu kỳ tiếp theo"
+note right : Hệ thống sẵn sàng cho lần xử lý tiếp theo
+"Chờ chu kỳ tiếp theo" --> "Main loop kiểm tra SR_ADC_UPDATE"
+
+note bottom
+Tóm tắt điều khiển ADC:
+
+1. Lấy mẫu liên tục: ADC1 + DMA1_Channel1 cập nhật adc_value real-time
+2. Chu kỳ 100ms: Timer4 đếm và tạo cờ SR_ADC_UPDATE
+3. Xử lý giá trị: Chuyển đổi raw ADC (0-4090) sang % (0-100)
+4. Hiển thị LCD: Cập nhật % và tính toán RPM/Voltage display
+5. Gửi setpoint: Nếu ở chế độ ADC, gửi giá trị mới cho slaves
+
+Ánh xạ giá trị:
+- Potentiometer: 0V → 0%, 1.65V → 50%, 3.3V → 100%
+- ADC raw: 0 → 0%, 2045 → 50%, 4090 → 100%
+- RPM control: 0% → 0 RPM, 50% → 3000 RPM, 100% → 6000 RPM
+- Voltage control: 0% → 0.00V, 50% → 4.50V, 100% → 9.00V
+
+Đặc điểm:
+- Real-time sampling: DMA cập nhật liên tục, không block CPU
+- Periodic processing: Xử lý mỗi 100ms để tránh dao động
+- Mode-aware: Chỉ áp dụng setpoint khi ở chế độ ADC
+- Visual feedback: LCD hiện * khi đang điều khiển bằng ADC
+end note
+
+@enduml

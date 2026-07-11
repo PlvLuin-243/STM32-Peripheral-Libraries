@@ -1,0 +1,135 @@
+@startuml continuous_setpoint_adjustment_activity
+
+header
+Name:        Continuous Setpoint Adjustment Activity Diagram (Legacy)
+Author:      STM32 CAN Master Team
+Version:     1.0
+Created:     2024-12-14
+Updated:     2024-12-14
+endheader
+
+title STM32 CAN Master - Sơ đồ điều chỉnh setpoint liên tục (Chu kỳ 100ms)
+
+legend bottom right
+Legend
+|<back:#lightpink>     | Nội bộ BINH |
+|<back:#white>     | COTS/Bên ngoài |
+|<back:#lightblue>    | Timer 100ms |
+|<back:#lightgreen>   | Xử lý setpoint |
+|<back:#lightyellow>  | Truyền CAN |
+endlegend
+
+(*) --> "Timer4 đếm 1ms"
+
+partition "Chu kỳ Timer 100ms" #lightblue {
+    "Timer4 đếm 1ms" --> "Tăng lcd_update_counter"
+    note right : Timer4 IRQ callback mỗi 1ms
+    "Tăng lcd_update_counter" --> if "Counter >= 100?" then
+        -->[CÓ] "Reset counter = 0"
+        note right : Đạt chu kỳ 100ms
+        "Reset counter = 0" --> "Đặt SR |= SR_SETPOINT_UPDATE"
+        note right : Báo hiệu main loop cập nhật setpoint
+        "Đặt SR |= SR_SETPOINT_UPDATE" --> "Đặt các cờ khác (LCD, ADC)"
+        note right : SR_LCD_UPDATE, SR_ADC_UPDATE
+        "Đặt các cờ khác (LCD, ADC)" --> "Timer4 đếm 1ms"
+    else
+        -->[CHƯA] "Timer4 đếm 1ms"
+        note right : Tiếp tục đếm
+    endif
+}
+
+partition "Xử lý setpoint liên tục" #lightgreen {
+    "Đặt SR |= SR_SETPOINT_UPDATE" --> "Main loop kiểm tra SR_SETPOINT_UPDATE"
+    note right : Vòng lặp chính phát hiện cờ setpoint
+    "Main loop kiểm tra SR_SETPOINT_UPDATE" --> "Xóa cờ SR_SETPOINT_UPDATE"
+    note right : SR &= ~SR_SETPOINT_UPDATE
+    "Xóa cờ SR_SETPOINT_UPDATE" --> "Gọi send_setpoint_to_running_slaves()"
+    note right : Bắt đầu quá trình cập nhật setpoint
+    
+    "Gọi send_setpoint_to_running_slaves()" --> if "Chế độ hiện tại?" then
+        -->[ADC] "adc_val = master_ctrl.adc_value"
+        note right : Sử dụng giá trị ADC thời gian thực (0-4090)
+        "adc_val = master_ctrl.adc_value" --> "Kiểm tra control_target"
+    else
+        -->[UART] "adc_val = (uart_setpoint * 4090) / 100"
+        note right : Chuyển % UART thành ADC tương đương
+        "adc_val = (uart_setpoint * 4090) / 100" --> "Kiểm tra control_target"
+    endif
+}
+
+partition "Phân phối setpoint thông minh" #lightyellow {
+    "Kiểm tra control_target" --> if "Target điều khiển?" then
+        -->[SLAVE1] "Kiểm tra slave1_info.status"
+        note right : Chỉ điều khiển Motor
+        "Kiểm tra slave1_info.status" --> if "Slave1 đang chạy?" then
+            -->[CÓ] "Chuyển đổi ADC → RPM"
+            note right : RPM = (adc_val * 6000) / 4090
+            "Chuyển đổi ADC → RPM" --> "Gửi CMD_SETPOINT_SLAVE1"
+            note right : Data=[RPM_MSB, RPM_LSB]
+            "Gửi CMD_SETPOINT_SLAVE1" --> "Motor áp dụng RPM mới"
+            "Motor áp dụng RPM mới" --> "Setpoint update hoàn tất"
+        else
+            -->[KHÔNG] "Bỏ qua - Slave không chạy"
+            note right : Không gửi setpoint cho slave dừng
+            "Bỏ qua - Slave không chạy" --> "Setpoint update hoàn tất"
+        endif
+    else
+        -->[SLAVE2] "Kiểm tra slave2_info.status"
+        note right : Chỉ điều khiển Buck converter
+        "Kiểm tra slave2_info.status" --> if "Slave2 đang chạy?" then
+            -->[CÓ] "Chuyển đổi ADC → Voltage"
+            note right : Voltage = (adc_val * 900) / 4090 (0.01V units)
+            "Chuyển đổi ADC → Voltage" --> "Gửi CMD_SETPOINT_SLAVE2"
+            note right : Data=[VOLT_MSB, VOLT_LSB]
+            "Gửi CMD_SETPOINT_SLAVE2" --> "Buck áp dụng Voltage mới"
+            "Buck áp dụng Voltage mới" --> "Setpoint update hoàn tất"
+        else
+            -->[KHÔNG] "Bỏ qua - Slave không chạy"
+            "Bỏ qua - Slave không chạy" --> "Setpoint update hoàn tất"
+        endif
+    endif
+    
+    "Kiểm tra control_target" --> if "Target là ALL?" then
+        -->[CÓ] "Kiểm tra trạng thái cả 2 slaves"
+        note right : Điều khiển cả Motor và Buck
+        "Kiểm tra trạng thái cả 2 slaves" --> if "Cả 2 đều chạy?" then
+            -->[CÓ] "Tạo CMD_SETPOINT_ALL"
+            note right : Gửi 1 lệnh cho cả 2: [RPM_MSB, RPM_LSB, VOLT_MSB, VOLT_LSB]
+            "Tạo CMD_SETPOINT_ALL" --> "Cả 2 slaves áp dụng setpoint"
+            "Cả 2 slaves áp dụng setpoint" --> "Setpoint update hoàn tất"
+        else
+            -->[KHÔNG] "Gửi riêng lẻ cho slaves đang chạy"
+            note right : Gửi riêng cho từng slave đang hoạt động
+            "Gửi riêng lẻ cho slaves đang chạy" --> "Setpoint update hoàn tất"
+        endif
+    else
+        -->[KHÔNG] "Setpoint update hoàn tất"
+    endif
+}
+
+"Setpoint update hoàn tất" --> "Chờ chu kỳ tiếp theo"
+note right : Hệ thống sẵn sàng cho lần cập nhật tiếp theo (100ms)
+"Chờ chu kỳ tiếp theo" --> "Timer4 đếm 1ms"
+
+note bottom
+Tóm tắt điều chỉnh setpoint liên tục:
+
+1. Chu kỳ chính xác: Timer4 tạo chu kỳ 100ms đều đặn
+2. Nguồn setpoint: ADC real-time hoặc UART command cuối cùng
+3. Phân phối thông minh: Chỉ gửi cho slaves đang chạy
+4. Tối ưu CAN: Sử dụng lệnh ALL khi cả 2 slaves cùng chạy
+5. Điều khiển mượt: Cập nhật liên tục không làm quá tải bus
+
+Ví dụ progression:
+- t=0ms: ADC=1000 → 24% → RPM=1440, VOLT=2.16V
+- t=100ms: ADC=2000 → 49% → RPM=2940, VOLT=4.41V
+- t=200ms: ADC=3000 → 73% → RPM=4380, VOLT=6.57V
+
+Đặc điểm:
+- Real-time response: Phản hồi ngay với thay đổi ADC/UART
+- Efficient CAN usage: Không gửi cho slaves không chạy
+- Smooth control: Cập nhật đều đặn mỗi 100ms
+- Target-aware: Gửi đúng slaves theo control_target
+end note
+
+@enduml

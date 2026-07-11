@@ -1,0 +1,184 @@
+@startuml uart_control_activity
+
+header
+Name:        UART Control Activity Diagram (Legacy)
+Author:      STM32 CAN Master Team
+Version:     1.0
+Created:     2024-12-14
+Updated:     2024-12-14
+endheader
+
+title STM32 CAN Master - Sơ đồ hoạt động điều khiển UART (Giao thức Duty:XX)
+
+legend bottom right
+Legend
+|<back:#lightpink>     | Nội bộ BINH |
+|<back:#white>     | COTS/Bên ngoài |
+|<back:#lightblue>    | Nhận dữ liệu UART |
+|<back:#lightgreen>   | Xử lý giao thức |
+|<back:#lightyellow>  | Định dạng phản hồi |
+|<back:#lightcyan>    | Truyền DMA |
+endlegend
+
+(*) --> "PC gửi lệnh qua UART"
+
+partition "Nhận dữ liệu UART" #lightblue {
+    "PC gửi lệnh qua UART" --> "USART1 nhận dữ liệu 'Duty:75\\r\\n'"
+    note right : UART Terminal gửi chuỗi lệnh
+    "USART1 nhận dữ liệu 'Duty:75\\r\\n'" --> "Kích hoạt DMA1_Channel5 (RX)"
+    note right : DMA tự động lưu bytes vào uart_rx_buffer[]
+    "Kích hoạt DMA1_Channel5 (RX)" --> "Lưu trữ vào uart_rx_buffer[]"
+    note right : Dữ liệu được ghi liên tục vào buffer
+    "Lưu trữ vào uart_rx_buffer[]" --> "Phát hiện IDLE line"
+    note right : USART1 phát hiện không còn dữ liệu truyền
+}
+
+partition "Xử lý ngắt IDLE" #lightblue {
+    "Phát hiện IDLE line" --> "Tạo ngắt USART1_IRQHandler"
+    note right : Hardware tự động tạo ngắt IDLE
+    "Tạo ngắt USART1_IRQHandler" --> "Kiểm tra USART1->SR & (1<<4)"
+    note right : Kiểm tra cờ IDLE trong Status Register
+    "Kiểm tra USART1->SR & (1<<4)" --> "Xóa cờ IDLE"
+    note right : dummy=USART1->SR; dummy=USART1->DR
+    "Xóa cờ IDLE" --> "Tính toán độ dài nhận"
+    note right : length = UART_RX_BUFFER_SIZE - DMA1_Channel5->CNDTR
+    
+    "Tính toán độ dài nhận" --> if "Có dữ liệu (length > 0)?" then
+        -->[CÓ] "Đặt uart_received = 1"
+        note right : Báo hiệu main loop có dữ liệu mới
+        "Đặt uart_received = 1" --> "Reset DMA cho lần tiếp theo"
+        note right : DMA1_Channel5->CNDTR = UART_RX_BUFFER_SIZE
+        "Reset DMA cho lần tiếp theo" --> "Kích hoạt lại DMA channel"
+        note right : Chuẩn bị cho lần nhận tiếp theo
+        "Kích hoạt lại DMA channel" --> "Ngắt IDLE hoàn tất"
+    else
+        -->[KHÔNG] "Ngắt IDLE hoàn tất"
+        note right : Bỏ qua nếu không có dữ liệu
+    endif
+}
+
+partition "Xử lý vòng lặp chính" #lightgreen {
+    "Ngắt IDLE hoàn tất" --> "Main loop kiểm tra uart_received"
+    note right : Vòng lặp chính phát hiện cờ UART
+    "Main loop kiểm tra uart_received" --> "Gọi uart_process()"
+    note right : Bắt đầu xử lý dữ liệu UART nhận được
+    "Gọi uart_process()" --> "Thêm null terminator"
+    note right : uart_rx_buffer[uart_rx_length] = '\\0'
+    "Thêm null terminator" --> "Kiểm tra định dạng lệnh"
+    note right : length >= 6 và bắt đầu với "Duty:"
+}
+
+partition "Phân tích giao thức" #lightgreen {
+    "Kiểm tra định dạng lệnh" --> if "Định dạng 'Duty:XX' hợp lệ?" then
+        -->[HỢP LỆ] "Trích xuất giá trị số"
+        note right : Phân tích chuỗi sau "Duty:" thành số
+        "Trích xuất giá trị số" --> "Vòng lặp phân tích digits"
+        note right : value = value * 10 + (digit - '0')
+        "Vòng lặp phân tích digits" --> "Giới hạn giá trị 0-100%"
+        note right : Đảm bảo setpoint trong phạm vi cho phép
+        "Giới hạn giá trị 0-100%" --> "Lưu master_ctrl.uart_setpoint"
+        note right : Cập nhật giá trị setpoint toàn cục
+        "Lưu master_ctrl.uart_setpoint" --> "Đọc trạng thái Slave1"
+    else
+        -->[KHÔNG HỢP LỆ] "Bỏ qua lệnh không hợp lệ"
+        note right : Không xử lý lệnh sai định dạng
+        "Bỏ qua lệnh không hợp lệ" --> "Xóa cờ uart_received"
+    endif
+}
+
+partition "Thu thập thông tin trạng thái" #lightyellow {
+    "Đọc trạng thái Slave1" --> "Lấy slave1_info.status và current_setpoint"
+    note right : Đọc trạng thái Motor (RPM)
+    "Lấy slave1_info.status và current_setpoint" --> "Đọc trạng thái Slave2"
+    note right : Lấy slave2_info.status và current_setpoint
+    "Đọc trạng thái Slave2" --> "Lấy slave2_info.status và current_setpoint"
+    note right : Đọc trạng thái Buck converter (Voltage)
+    "Lấy slave2_info.status và current_setpoint" --> "Định dạng chuỗi Slave1"
+}
+
+partition "Định dạng phản hồi" #lightyellow {
+    "Định dạng chuỗi Slave1" --> if "Trạng thái Slave1?" then
+        -->[RUNNING (0x01)] "Format 'RUN RPM:xxxx'"
+        note right : Hiển thị tốc độ RPM hiện tại
+        "Format 'RUN RPM:xxxx'" --> "Định dạng chuỗi Slave2"
+    else
+        -->[STOPPED (0x02)] "Format 'STOP'"
+        "Format 'STOP'" --> "Định dạng chuỗi Slave2"
+    endif
+    
+    "Định dạng chuỗi Slave2" --> if "Trạng thái Slave2?" then
+        -->[RUNNING (0x01)] "Chuyển đổi setpoint sang voltage"
+        note right : Tính volt_int.volt_dec từ giá trị setpoint
+        "Chuyển đổi setpoint sang voltage" --> "Format 'RUN VOLT:xx.xV'"
+        note right : Hiển thị điện áp với 1 chữ số thập phân
+        "Format 'RUN VOLT:xx.xV'" --> "Tạo thông điệp hoàn chỉnh"
+    else
+        -->[STOPPED/ERR/IDLE] "Format trạng thái tương ứng"
+        note right : STOP/ERR/IDLE tùy theo status code
+        "Format trạng thái tương ứng" --> "Tạo thông điệp hoàn chỉnh"
+    endif
+    
+    "Tạo thông điệp hoàn chỉnh" --> "snprintf() response message"
+    note right : Format: "Received: Duty:XX% | S1: STATUS | S2: STATUS\\r\\n"
+    "snprintf() response message" --> "Kiểm tra uart1_tx_complete"
+    note right : Đảm bảo DMA TX sẵn sàng truyền
+}
+
+partition "Truyền phản hồi DMA" #lightcyan {
+    "Kiểm tra uart1_tx_complete" --> "Gọi UART_DMA_SendData()"
+    note right : Khởi động truyền DMA1_Channel4
+    "Gọi UART_DMA_SendData()" --> "Cấu hình DMA1_Channel4"
+    note right : Thiết lập DMA TX cho USART1->DR
+    "Cấu hình DMA1_Channel4" --> "Bắt đầu truyền DMA"
+    note right : DMA tự động gửi từng byte từ buffer
+    "Bắt đầu truyền DMA" --> "Truyền dữ liệu về PC"
+    note right : UART Terminal nhận phản hồi
+    "Truyền dữ liệu về PC" --> "PC hiển thị response"
+    note right : Hiện thị trên terminal của người dùng
+    
+    "PC hiển thị response" --> "DMA TX hoàn tất"
+    note right : DMA1_Channel4 tạo ngắt hoàn thành
+    "DMA TX hoàn tất" --> "Đặt uart1_tx_complete = 1"
+    note right : Báo hiệu DMA TX sẵn sàng cho lần tiếp theo
+    "Đặt uart1_tx_complete = 1" --> "Xóa cờ uart_received"
+}
+
+"Xóa cờ uart_received" --> "UART processing hoàn tất"
+note right : uart_received = 0, chuẩn bị cho lệnh tiếp theo
+
+"UART processing hoàn tất" --> if "Đang ở chế độ UART?" then
+    -->[CÓ] "Áp dụng setpoint mới (100ms cycle)"
+    note right : Nếu current_mode == MODE_SETPOINT_UART
+    "Áp dụng setpoint mới (100ms cycle)" --> "LCD hiển thị % với dấu *"
+    note right : Hiện tỷ lệ phần trăm với indicator UART
+    "LCD hiển thị % với dấu *" --> "Chuyển đổi và gửi setpoint"
+    note right : Convert sang RPM/Voltage và gửi qua CAN
+    "Chuyển đổi và gửi setpoint" --> (*)
+else
+    -->[KHÔNG] (*)
+    note right : Chỉ cập nhật giá trị, không áp dụng ngay
+endif
+
+note bottom
+Tóm tắt điều khiển UART:
+
+1. Nhận dữ liệu: DMA1_Channel5 lưu vào buffer, IDLE interrupt phát hiện kết thúc
+2. Giao thức: "Duty:XX\\r\\n" với XX từ 0-100%
+3. Phân tích: Trích xuất giá trị số, lưu vào master_ctrl.uart_setpoint
+4. Thu thập: Đọc trạng thái slave1_info và slave2_info
+5. Định dạng: Tạo response với status hiện tại của cả 2 slave
+6. Truyền: DMA1_Channel4 gửi phản hồi về PC
+7. Áp dụng: Nếu ở chế độ UART, setpoint được áp dụng trong chu kỳ 100ms
+
+Ví dụ giao tiếp:
+- Gửi: "Duty:75\\r\\n"
+- Nhận: "Received: Duty:75% | S1: RUN RPM:4500 | S2: RUN VOLT:6.8V\\r\\n"
+
+Đặc điểm:
+- Real-time status: Phản hồi ngay lập tức với trạng thái hiện tại
+- DMA efficiency: Nhận và truyền không block CPU
+- Protocol validation: Kiểm tra định dạng trước khi xử lý
+- Mode-aware: Chỉ áp dụng setpoint khi ở chế độ UART
+end note
+
+@enduml

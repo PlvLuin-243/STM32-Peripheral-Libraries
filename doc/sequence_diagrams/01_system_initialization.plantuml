@@ -1,0 +1,148 @@
+@startuml system_initialization_activity
+
+header
+Name:        System Initialization Activity Diagram (Legacy)
+Author:      STM32 CAN Master Team
+Version:     1.0
+Created:     2024-12-14
+Updated:     2024-12-14
+endheader
+
+title STM32 CAN Master - Sơ đồ hoạt động khởi tạo hệ thống
+
+legend bottom right
+Legend
+|<back:#lightpink>     | Nội bộ BINH |
+|<back:#white>     | COTS/Bên ngoài |
+|<back:#lightblue>    | Cấu hình phần cứng |
+|<back:#lightgreen>   | Truyền thông |
+|<back:#lightyellow>  | Thiết lập giao diện |
+endlegend
+
+(*) --> "Bắt đầu khởi tạo hệ thống"
+
+partition "Khởi tạo phần cứng cốt lõi" #lightblue {
+    "Bắt đầu khởi tạo hệ thống" --> "SysTick_Init()"
+    note right : Khởi tạo bộ đếm thời gian hệ thống
+    "SysTick_Init()" --> "Cấu hình thanh ghi SysTick"
+    "Cấu hình thanh ghi SysTick" --> "LCD_Init()"
+    note right : Khởi tạo màn hình hiển thị LCD
+    "LCD_Init()" --> "Cấu hình chân và giao diện LCD"
+    "Cấu hình chân và giao diện LCD" --> "Timer_IRQ_Init(TIM4, 71, 999)"
+    note right : Thiết lập Timer4 tạo ngắt mỗi 1ms
+    "Timer_IRQ_Init(TIM4, 71, 999)" --> "Cấu hình TIM4 cho ngắt 1ms"
+    "Cấu hình TIM4 cho ngắt 1ms" --> "Phần cứng cốt lõi sẵn sàng"
+    note right : SysTick, LCD và Timer4 đã hoạt động
+}
+
+partition "Thiết lập truyền thông CAN" #lightgreen {
+    "Phần cứng cốt lõi sẵn sàng" --> "can_init()"
+    note right : Khởi tạo module CAN bus
+    "can_init()" --> "Cấu hình bộ điều khiển CAN"
+    "Cấu hình bộ điều khiển CAN" --> "can_master_setup_filters()"
+    note right : Thiết lập bộ lọc để nhận dữ liệu từ slaves
+    "can_master_setup_filters()" --> "Thiết lập bộ lọc Slave1 (0x301)"
+    "Thiết lập bộ lọc Slave1 (0x301)" --> "Thiết lập bộ lọc Slave2 (0x302)"
+    "Thiết lập bộ lọc Slave2 (0x302)" --> "Hệ thống CAN sẵn sàng"
+    note right : CAN có thể giao tiếp với 2 thiết bị slave
+}
+
+partition "Thiết lập giao diện nút bấm" #lightyellow {
+    "Hệ thống CAN sẵn sàng" --> "buttons_init()"
+    note right : Khởi tạo 4 nút bấm điều khiển
+    "buttons_init()" --> "Cấu hình chân GPIO\n(PB0, PB1, PB10, PB11)"
+    note right : PB0:Slave1, PB1:Slave2, PB10:Mode, PB11:Control
+    "Cấu hình chân GPIO\n(PB0, PB1, PB10, PB11)" --> "Đặt chân làm đầu vào với pull-up"
+    "Đặt chân làm đầu vào với pull-up" --> "Cấu hình ngắt EXTI\n(EXTI0, EXTI1, EXTI10, EXTI11)"
+    note right : Cho phép phát hiện nhấn nút qua ngắt
+    "Cấu hình ngắt EXTI\n(EXTI0, EXTI1, EXTI10, EXTI11)" --> "Bật ngắt ngoài"
+    "Bật ngắt ngoài" --> "Giao diện nút bấm sẵn sàng"
+    note right : 4 nút bấm hoạt động với chống nhiễu
+}
+
+partition "Cấu hình ADC và DMA" #lightblue {
+    "Giao diện nút bấm sẵn sàng" --> "adc_gpio_init()"
+    note right : Thiết lập chân analog để đọc potentiometer
+    "adc_gpio_init()" --> "Cấu hình PA1 làm đầu vào analog"
+    note right : PA1 kết nối với potentiometer (0-3.3V)
+    "Cấu hình PA1 làm đầu vào analog" --> "DMA1_Channel1_Config()"
+    note right : Thiết lập DMA để tự động lưu giá trị ADC
+    "DMA1_Channel1_Config()" --> "Cấu hình DMA1 Channel1 cho ADC"
+    "Cấu hình DMA1 Channel1 cho ADC" --> "ADC1_DMA_Config(1)"
+    note right : Kết nối ADC1 với DMA để đọc liên tục
+    "ADC1_DMA_Config(1)" --> "Cấu hình ADC1 với DMA"
+    "Cấu hình ADC1 với DMA" --> "Hệ thống ADC sẵn sàng"
+    note right : ADC đọc potentiometer liên tục, lưu qua DMA
+}
+
+partition "Thiết lập UART DMA" #lightgreen {
+    "Hệ thống ADC sẵn sàng" --> "UART_Init(1, 9600)"
+    note right : Khởi tạo UART1 để giao tiếp với máy tính
+    "UART_Init(1, 9600)" --> "Cấu hình USART1 tốc độ 9600 baud"
+    note right : Thiết lập tốc độ truyền 9600 bps
+    "Cấu hình USART1 tốc độ 9600 baud" --> "UART_DMA_TX_Init(1)"
+    note right : Cấu hình DMA để gửi dữ liệu tự động
+    "UART_DMA_TX_Init(1)" --> "Cấu hình DMA cho TX"
+    "Cấu hình DMA cho TX" --> "UART_DMA_RX_Init()"
+    note right : Cấu hình DMA để nhận dữ liệu tự động
+    "UART_DMA_RX_Init()" --> "Cấu hình DMA cho RX với phát hiện IDLE"
+    note right : Phát hiện khi dừng nhận để xử lý lệnh
+    "Cấu hình DMA cho RX với phát hiện IDLE" --> "UART_DMA_Enable(1)"
+    "UART_DMA_Enable(1)" --> "Bật hoạt động UART DMA"
+    "Bật hoạt động UART DMA" --> "Bật ngắt USART1 IDLE"
+    "Bật ngắt USART1 IDLE" --> "Hệ thống UART sẵn sàng"
+    note right : UART có thể nhận lệnh "Duty:XX" và gửi phản hồi
+}
+
+partition "Khởi tạo biến điều khiển" #lightpink {
+    "Hệ thống UART sẵn sàng" --> "variables_init()"
+    note right : Thiết lập các biến điều khiển ban đầu
+    "variables_init()" --> "Đặt current_mode = MODE_SETPOINT_UART"
+    note right : Chế độ mặc định: điều khiển qua UART
+    "Đặt current_mode = MODE_SETPOINT_UART" --> "Đặt control_target = CONTROL_TARGET_ALL"
+    note right : Mặc định điều khiển cả 2 slave
+    "Đặt control_target = CONTROL_TARGET_ALL" --> "Khởi tạo giá trị setpoint = 0"
+    note right : Đặt tất cả setpoint về 0%
+    "Khởi tạo giá trị setpoint = 0" --> "Khởi tạo cấu trúc thông tin slave"
+    note right : Tạo slave1_info và slave2_info
+    "Khởi tạo cấu trúc thông tin slave" --> "Biến điều khiển đã khởi tạo"
+    note right : Hệ thống có cấu hình điều khiển mặc định
+}
+
+partition "Hoạt động hệ thống sẵn sàng" #lightgreen {
+    "Biến điều khiển đã khởi tạo" --> "Delay_ms(100)"
+    note right : Đợi các thiết bị slave khởi tạo xong
+    "Delay_ms(100)" --> "can_send_status_all()"
+    note right : Kiểm tra kết nối với tất cả slaves
+    "can_send_status_all()" --> "Gửi khung RTR (CMD_STATUS_ALL)"
+    note right : Yêu cầu slaves báo cáo trạng thái
+    "Gửi khung RTR (CMD_STATUS_ALL)" --> "lcd_display_startup()"
+    note right : Hiển thị màn hình khởi động
+    "lcd_display_startup()" --> "Hiển thị màn hình khởi động 2 giây"
+    note right : Hiện thông tin nhóm và dự án
+    "Hiển thị màn hình khởi động 2 giây" --> "Thiết lập bố cục hiển thị chính"
+    note right : Chuẩn bị giao diện điều khiển chính
+    "Thiết lập bố cục hiển thị chính" --> "Hệ thống hoạt động hoàn toàn"
+    note right : Sẵn sàng nhận lệnh từ người dùng
+}
+
+"Hệ thống hoạt động hoàn toàn" --> (*)
+
+note bottom
+Tóm tắt các bước khởi tạo chính:
+1. Phần cứng cốt lõi: SysTick, LCD, Timer4 (ngắt 1ms)
+2. Truyền thông CAN: Bộ điều khiển và bộ lọc cho 2 slaves
+3. Giao diện người dùng: 4 nút bấm với ngắt EXTI
+4. Hệ thống ADC: Đầu vào analog PA1 với DMA
+5. Truyền thông UART: 9600 baud với TX/RX DMA và phát hiện IDLE
+6. Biến điều khiển: Chế độ mặc định và cấu trúc thông tin slave
+7. Hệ thống sẵn sàng: Kiểm tra trạng thái ban đầu và hiển thị khởi động
+
+Sau khi hoàn thành, hệ thống có thể:
+- Điều khiển 2 thiết bị slave qua CAN (Motor và Buck converter)
+- Nhận lệnh qua UART ("Duty:XX") hoặc potentiometer (ADC)
+- Hiển thị trạng thái real-time trên LCD
+- Phản hồi với nút bấm người dùng
+end note
+
+@enduml
