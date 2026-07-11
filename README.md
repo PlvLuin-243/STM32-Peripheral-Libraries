@@ -1,7 +1,10 @@
 ### 📊 System Architecture & Experimental Setup
 
 #### 1. Network Topology
-![Network Topology](image/topology.png)
-
+  <p align="center">
+    <img src="image/topology.png" width="100%" alt="Simulation Phi = pi">
+  </p>
 #### 2. Hardware Implementation
-![Hardware System](image/Final.png)
+    <p align="center">
+    <img src="image/Final.png" width="70%" alt="Simulation Phi = pi">
+  </p>
