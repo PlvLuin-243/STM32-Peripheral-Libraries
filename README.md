@@ -1,5 +1,3 @@
-# Advanced-Microcontroller-DUT
-STM32, CAN, BUCK, INPUT CAPTURE, UART DMA, ADC DMA, PID, LCD
 ### 📊 System Architecture & Experimental Setup
 
 #### 1. Network Topology
